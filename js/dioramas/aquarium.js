@@ -206,7 +206,7 @@ export async function build(ctx) {
   fish.forEach(f => { f.q.setFromUnitVectors(fwd, dir.copy(f.v).normalize()); place(f); });
   meshes.forEach(m => m.instanceMatrix.needsUpdate = true);
 
-  const tank = ambience("assets/sound/aquarium-tank.m4a", 0.38);       // the app's own tank ambience
+  const tank = ambience("assets/sound/aquarium-tank.mp4", 0.38);       // the app's own tank ambience
   return {
     group: g,
     footprint: 1.4,

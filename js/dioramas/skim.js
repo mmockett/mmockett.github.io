@@ -296,7 +296,7 @@ export async function build(ctx) {
   }
 
   let wind = 0; const wp = new THREE.Vector3();
-  const shore = ambience("assets/sound/skim-shoreside.m4a", 0.42);    // Max's own recording of the lakeside, as the game plays it
+  const shore = ambience("assets/sound/skim-shoreside.mp4", 0.42);    // Max's own recording of the lakeside, as the game plays it
   return {
     group: g,
     footprint: RIM,
@@ -321,7 +321,7 @@ export async function build(ctx) {
           if (i >= path.hit) {
             const x = path.from.x + path.dir.x * a, z = path.from.y + path.dir.y * a; rip.add(x, z, t, 0.12 * (1 - i * 0.1)); path.hit = i + 1;
             // Skim's own splashes, for a stone you threw (the idle throws stay quiet), softer at each skip.
-            if (path.thrown) play(`assets/sound/skim-splash-${1 + Math.floor(Math.random() * 4)}.m4a`, { gain: 0.8 * Math.pow(0.78, i), rate: 0.94 + Math.random() * 0.12 });
+            if (path.thrown) play(`assets/sound/skim-splash-${1 + Math.floor(Math.random() * 4)}.mp4`, { gain: 0.8 * Math.pow(0.78, i), rate: 0.94 + Math.random() * 0.12 });
           }
           stone.visible = true;
           stone.position.set(path.from.x + path.dir.x * u, Y_W + 0.01 + Math.sin(Math.PI * f) * 0.12 * (1 - i * 0.15), path.from.y + path.dir.y * u);
