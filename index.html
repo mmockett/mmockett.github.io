@@ -63,13 +63,17 @@ body.dark-hdr .hdr p, body.dark-hdr .hdr nav a { color: rgba(240,240,238,.7); }
 }
 .hint { position: fixed; z-index: 5; left: 16px; bottom: 14px; font: 400 12px "IBM Plex Mono", monospace; color: var(--muted); transition: opacity .3s; }
 
-/* Placeholders while the models load: a faded still, filling with colour from the left as the model's files arrive */
+/* Placeholders while the models load: each app's icon, faded, filling with colour from the left as its model's files arrive */
 .holds { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
-.hold { position: absolute; left: 0; top: 0; aspect-ratio: 1; transition: opacity .7s ease; will-change: transform; }
-.hold img { position: absolute; inset: 0; width: 100%; height: 100%; }
-.hold .g { filter: grayscale(1) contrast(.85); opacity: .38; }
-.hold .c { clip-path: inset(0 calc((1 - var(--p, 0)) * 100%) 0 0); }
-.hold.done { opacity: 0; }
+.hold { position: absolute; left: 0; top: 0; width: 64px; height: 64px; transition: opacity .5s ease, scale .5s ease; }
+.hold > div { position: absolute; inset: 0; border-radius: 15px; overflow: hidden; }
+.hold img, .hold .glyph { display: grid; place-items: center; width: 100%; height: 100%; }
+.hold .glyph { background: #000; color: #fff; font: 600 18px Inter, sans-serif; }
+.hold .g { filter: grayscale(1); opacity: .32; box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+.hold::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -14px; height: 3px; border-radius: 2px;   /* and a plain progress bar under it */
+  background: linear-gradient(var(--ink), var(--ink)) 0 0 / calc(var(--p, 0) * 100%) 100% no-repeat, rgba(0,0,0,.1); }
+.hold .c { clip-path: inset(0 calc((1 - var(--p, 0)) * 100%) 0 0); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+.hold.done { opacity: 0; scale: .85; }
 @media (prefers-reduced-motion: reduce) { .hold { transition: none; } }
 
 /* Labels under the models */

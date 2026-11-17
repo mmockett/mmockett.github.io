@@ -11,31 +11,25 @@ const DIORAMAS = {
   plinth: () => import("./dioramas/plinth.js")
 };
 
-// A model's placeholder: a still of it, framed STILL.w world units square around a point STILL.look above its place,
-// from STILL.d away at the overview's 27°. ?still=<id> draws just that model so, on a transparent background, for
-// making the stills (media/stills/<id>.webp; see window.__still below).
-const STILL = { w: 3.3, d: 24, el: 27, look: new THREE.Vector3(0, 0.6, 0.5) };
 // Roughly how many bytes each model's own files come to, so its placeholder can fill as they arrive (kit.js counts
 // them by asset folder); a model with none fills on a timer instead.
 const EXPECT = { skim: 1024892 + 7 * TEX_BYTES, aquarium: 3568952 + TEX_BYTES };
 
 export function mountTable({ canvas, projects, labels, phone, reduced, look: lookName, onOpen, onClose, onHover, onDismiss, onRow }) {
-  const still = new URLSearchParams(location.search).get("still");
-  if (still) { projects = projects.filter(p => p.id === still); reduced = true; labels.style.display = "none"; }
   // The scene is sized from the canvas as laid out, not from the window: on iPhone and iPad (and inside an embedding
   // frame) innerWidth/innerHeight can disagree with the box the canvas fills, or change without a resize event,
   // and either one stretches the picture. A ResizeObserver, and a check each frame, keep the two in step.
   let VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance", alpha: !!still });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance"});
   // Drawn at up to twice the screen's resolution: phones at their own (capped at 2), and 1x desktop screens
   // supersampled at 1.5 for smoother edges. The frame loop steps this down if frames run slow.
-  let dpr = still ? 1 : phone ? Math.min(devicePixelRatio, 2) : Math.min(Math.max(devicePixelRatio, 1.5), 2);
+  let dpr = phone ? Math.min(devicePixelRatio, 2) : Math.min(Math.max(devicePixelRatio, 1.5), 2);
   renderer.setPixelRatio(dpr);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
   const BG = new THREE.Color("#e9e4d8");
-  scene.background = still ? null : BG;           // no fog: the table is flat page colour, and fog faded the models whenever the camera stood back
+  scene.background = BG;           // no fog: the table is flat page colour, and fog faded the models whenever the camera stood back
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 120);
   const T = { value: 0 };
 
@@ -49,7 +43,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   // and the page around it without a step.
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: "#e9e4d8", toneMapped: false }));
   // The models shade themselves, but cast nothing on the table: they sit on it cleanly.
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; ground.visible = !still; scene.add(ground);
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; scene.add(ground);
   const look = lookName ? useLook(lookName, { renderer, scene, hemi, sun, ground, phone }) : null;
   look?.dress(ground);
 
@@ -133,35 +127,32 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   labels.innerHTML = stands.map(s => `<button type="button" class="label" data-id="${s.p.id}" aria-label="${s.p.name}${s.p.platform ? ", " + s.p.platform : ""}"><b>${s.p.logo || s.p.short || s.p.name}</b></button>`).join("");
   const labelEls = [...labels.children];
 
-  // Placeholders: while a model loads, a faded still of it stands in its place, filling with colour from left to
-  // right as its files arrive; once the model is on the table the still fades away. (Current look only: the stills
-  // are of it.)
+  // Placeholders: while a model loads, its app icon stands where it will be, faded, filling with colour from left to
+  // right as the model's files arrive; once the model is on the table the icon fades away.
   const holds = document.createElement("div"); holds.className = "holds"; labels.before(holds);
-  if (!lookName && !still) stands.forEach(s => {
-    const src = `media/stills/${s.p.id}.webp`, el = document.createElement("div");
-    el.className = "hold"; el.innerHTML = `<img class="g" src="${src}" alt=""><img class="c" src="${src}" alt="">`;
-    el.querySelector("img").onerror = () => { el.remove(); s.hold = null; };
+  stands.forEach(s => {
+    const p = s.p, face = p.icon ? `<img src="${p.icon}" alt="">` : `<span class="glyph">${p.glyph || p.name[0]}</span>`;
+    const el = document.createElement("div"); el.className = "hold";
+    el.innerHTML = `<div class="g">${face}</div><div class="c">${face}</div>`;
     holds.append(el); Object.assign(s, { hold: el, shown: 0, born: performance.now(), readyAt: 0 });
   });
-  const hc = new THREE.Vector3(), hr = new THREE.Vector3(), ha = new THREE.Vector3(), hb = new THREE.Vector3();
+  const hc = new THREE.Vector3();
   function placeHolds(now, dt) {
-    hr.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(STILL.w / 2);
     for (const s of stands) {
       const el = s.hold; if (!el) continue;
       const want = s.d ? 1 : EXPECT[s.p.diorama] ? Math.min(0.96, (loaded[s.p.diorama] || 0) / EXPECT[s.p.diorama]) : 0.9 * (1 - Math.exp(-(now - s.born) / 700));
       s.shown = Math.max(s.shown, s.shown + (want - s.shown) * Math.min(1, dt * 6));
       el.style.setProperty("--p", s.shown.toFixed(3));
-      hc.copy(s.base).add(STILL.look);
-      ha.copy(hc).sub(hr).project(camera); hb.copy(hc).add(hr).project(camera); hc.project(camera);
-      const w = Math.hypot((hb.x - ha.x) * VW / 2, (hb.y - ha.y) * VH / 2), x = (hc.x * 0.5 + 0.5) * VW, y = (-hc.y * 0.5 + 0.5) * VH;
-      el.style.width = `${w}px`; el.style.transform = `translate(${x - w / 2}px, ${y - w / 2}px)`;
+      hc.copy(s.base).setY(0.6).project(camera);
+      el.style.transform = `translate(${(hc.x * 0.5 + 0.5) * VW}px, ${(-hc.y * 0.5 + 0.5) * VH}px) translate(-50%, -50%)`;
       if (s.d && s.shown > 0.985) {
         s.readyAt ||= now;
-        if (now - s.readyAt > 120) el.classList.add("done");     // the model has drawn a few frames under it
+        if (now - s.readyAt > 150) el.classList.add("done");     // the model has drawn a few frames by now
         if (now - s.readyAt > 900) { el.remove(); s.hold = null; }
       }
     }
   }
+
   labelEls.forEach(el => el.addEventListener("click", () => { location.hash = el.dataset.id; }));
 
   // Pointer
@@ -273,11 +264,6 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       const o = overviewAt(pan); cam.pos.copy(o.pos); cam.look.copy(o.look); cam.off.set(0, 0);
     }
     camera.position.copy(cam.pos); camera.lookAt(cam.look);
-    if (still) {                                              // the still's own framing (see STILL)
-      const el = THREE.MathUtils.degToRad(STILL.el), L = STILL.look;
-      camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(STILL.w / 2 / STILL.d)); camera.aspect = VW / VH; camera.clearViewOffset(); camera.updateProjectionMatrix();
-      camera.position.set(L.x, L.y + Math.sin(el) * STILL.d, L.z + Math.cos(el) * STILL.d); camera.lookAt(L);
-    }
     if (cam.off.lengthSq() > 0.25) camera.setViewOffset(VW, VH, cam.off.x, cam.off.y, VW, VH); else camera.clearViewOffset();
     for (const s of stands) {
       const want = !focus && hot === s && !reduced ? 0.12 : 0;
@@ -307,9 +293,6 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     else renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
-
-  // For making the stills: draw the frame now and hand it back as a WebP with its transparency.
-  if (still) window.__still = () => { renderer.render(scene, camera); return renderer.domElement.toDataURL("image/webp", 0.86); };
 
   // One model along the row (the arrows on the table).
   const step = d => { if (!focus && scrolls()) snapTo(panTarget + d * SLOT); };
