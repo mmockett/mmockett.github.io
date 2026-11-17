@@ -58,27 +58,30 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   const stands = projects.map((p, i) => ({ p, i, d: null, root: new THREE.Group(), base: new THREE.Vector3(), lift: 0 }));
   stands.forEach(s => scene.add(s.root));
 
-  // Lay the dioramas out in one gentle arc. The camera shows the whole row while that leaves each model at least
-  // MIN_PX across; narrower than that it holds the models at that size (down to about one model across on a phone)
-  // and you scroll along the row instead: drag, swipe, wheel or arrow keys, settling on the nearest model. Every
-  // step of this changes continuously with the window's size, so nothing jumps as it is resized.
-  const SLOT = 3.35, n = stands.length, ROW_HALF = (n * SLOT) / 2 + 1.0, MIN_PX = 240;
-  let half = ROW_HALF, panMax = 0, pan = 0, panTarget = 0, snapTimer = 0, started = false, rowKey = "";
+  // Lay the dioramas out in one gentle arc. While the whole row fits with each model at least MIN_PX across, the
+  // camera shows it all; narrower than that it becomes a carousel, zooming in to one model per screen, and you move
+  // along the row by dragging, swiping, the wheel, the arrow keys or the arrows, settling on a model. The change
+  // between the two eases over a moment rather than jumping, and the field of view follows the window's shape.
+  const SLOT = 3.35, n = stands.length, ROW_HALF = (n * SLOT) / 2 + 1.0, MIN_PX = 240, ONE = SLOT * 0.64;
+  let half = ROW_HALF, halfTarget = ROW_HALF, panMax = 0, pan = 0, panTarget = 0, snapTimer = 0, rowKey = "";
   const arcZ = x => -Math.cos(x / 7) * 0.9 + 0.9;
   const clampPan = x => THREE.MathUtils.clamp(x, -panMax, panMax);
-  function layout() {
+  function layout(first) {
     stands.forEach((s, i) => { const x = (i - (n - 1) / 2) * SLOT; s.base.set(x, 0, arcZ(x)); s.root.position.copy(s.base); });
-    half = THREE.MathUtils.clamp(VW / MIN_PX * SLOT / 2, SLOT * 0.64, ROW_HALF);
-    panMax = ROW_HALF - half;
-    if (!started) { pan = panTarget = -panMax; started = true; }   // first view: from the start of the row
-    pan = clampPan(pan); panTarget = clampPan(panTarget);
+    const fits = VW * SLOT / (2 * ROW_HALF) >= MIN_PX, was = halfTarget < ROW_HALF;
+    halfTarget = fits ? ROW_HALF : Math.max(ONE, 1.1 * VW / VH);        // one model, tall enough for the tallest
+    panMax = ROW_HALF - halfTarget;
+    if (first || reduced) half = halfTarget;
+    if (!fits && (first || !was)) pan = panTarget = -panMax;         // entering the carousel: from the start of the row
+    if (fits) panTarget = 0;
+    panTarget = clampPan(panTarget);
   }
   const scrolls = () => panMax > 0.05;
   // The overview camera, about 27° up, seeing `half` either side of x along the row.
   function overviewAt(x) {
     const vf = THREE.MathUtils.degToRad(camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
     const dist = Math.max(half / Math.tan(hf / 2), 7), el = THREE.MathUtils.degToRad(27);
-    const k = (ROW_HALF - half) / (ROW_HALF - SLOT * 0.64);          // 0 seeing the whole row … 1 at one model across
+    const k = THREE.MathUtils.clamp((ROW_HALF - half) / (ROW_HALF - ONE), 0, 1);   // 0 seeing the whole row … 1 at one model
     const look = new THREE.Vector3(x, 0.6, 0.5 + arcZ(x) * k);       // close in, follow the arc to the model in view
     return { pos: look.clone().add(new THREE.Vector3(0, Math.sin(el) * dist, Math.cos(el) * dist)), look };
   }
@@ -235,11 +238,13 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     if (focus === s) fly(viewFor(s), 1);
   }));
 
+  let laidOut = false;
   function resize() {
     VW = canvas.clientWidth || innerWidth; VH = canvas.clientHeight || innerHeight;
     renderer.setSize(VW, VH, false); sizeLook();
-    camera.aspect = VW / VH; camera.fov = THREE.MathUtils.clamp(30 + (VH / VW - 0.85) * 22, 30, 40);   // wider as the window gets taller, without a step camera.updateProjectionMatrix();
-    layout();
+    // The field of view widens as the window gets taller, without a step.
+    camera.aspect = VW / VH; camera.fov = THREE.MathUtils.clamp(30 + (VH / VW - 0.85) * 22, 30, 40); camera.updateProjectionMatrix();
+    layout(!laidOut); laidOut = true;
     const to = focus ? viewFor(focus) : overviewAt(pan); cam.pos.copy(to.pos); cam.look.copy(to.look); cam.off.copy(to.off || new THREE.Vector2()); tween = null;
   }
   function sizeLook() { const b = renderer.getDrawingBufferSize(new THREE.Vector2()); look?.setSize(b.x, b.y, renderer.getPixelRatio()); }
@@ -262,6 +267,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       if (tween.arc) { const b = Math.sin(Math.PI * e) * tween.arc; v3.subVectors(cam.pos, cam.look).normalize(); cam.pos.addScaledVector(v3, b).y += b * 0.35; }
       if (k >= 1) tween = null;
     }
+    half += (halfTarget - half) * (reduced ? 1 : Math.min(1, dt * 5));   // into or out of the carousel, eased
     if (!focus && !tween) {                                   // on the table: the camera rides the pan along the row
       pan += (panTarget - pan) * (reduced ? 1 : Math.min(1, dt * 7));
       const o = overviewAt(pan); cam.pos.copy(o.pos); cam.look.copy(o.look); cam.off.set(0, 0);
