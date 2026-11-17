@@ -25,11 +25,16 @@ canvas#table { position: fixed; inset: 0; width: 100%; height: 100%; display: bl
   -webkit-mask-image: linear-gradient(#000 calc(100% - 10px), transparent); mask-image: linear-gradient(#000 calc(100% - 10px), transparent); }
 .hdr > * { max-width: calc(100vw - 32px); }
 .hdr > * { pointer-events: auto; }
-.hdr .row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.hdr .row { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; }
 .hdr h1 { margin: 0; white-space: nowrap; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .hdr h1 a { text-decoration: none; }
 .hdr p { margin: 0; font-size: 13px; color: var(--muted); }
-.hdr nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: -6px; }
+.hdr nav { display: flex; gap: 2px; flex-wrap: nowrap; margin-left: -6px; }
+.hdr.compact nav { gap: 4px; }
+.hdr.compact nav .nl, .hdr.compact nav .out { display: none; }
+.hdr.compact nav a { padding: 6px; }
+.hdr.compact nav .ni { width: 22px; height: 22px; margin: 0; border-radius: 6px; }
+.hdr.compact nav .ni.glyph { font-size: 9px; line-height: 22px; }
 .hdr nav a { font-size: 13px; white-space: nowrap; text-decoration: none; color: var(--muted); padding: 3px 6px; border-radius: 6px; }
 .hdr nav a:hover, .hdr nav a.on { color: var(--ink); background: rgba(0,0,0,.05); }
 .hdr nav .out { width: 9px; height: 9px; margin-left: 3px; vertical-align: 1px; opacity: .75; }
@@ -59,7 +64,7 @@ body.dark-hdr .hdr p, body.dark-hdr .hdr nav a { color: rgba(240,240,238,.7); }
   .hdr { padding: 10px 12px 14px; }
   .hdr > * { max-width: none; }
   .hdr .row { flex-wrap: nowrap; gap: 10px; }
-  .hdr nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -12px; padding-right: 12px; }
+  .hdr nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-right: -12px; padding-right: 12px; }   /* scrolls only if even the icons don't fit */
   .hdr nav::-webkit-scrollbar { display: none; }
   .hdr p { font-size: 12.5px; max-width: 30ch; }
   body.open .hdr p { display: none; }
@@ -406,13 +411,23 @@ const render = s => (RENDER[s.type] || RENDER.text)(s);
 /* Header */
 // Projects open on the table; Music and GitHub go straight out to SoundCloud and GitHub.
 const OUT = '<svg class="out" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 2.5h5.5V8M9.5 2.5L3 9"/></svg>';
-const outLink = (href, label, icon = "") => `<a href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(label)} (opens in a new tab)">${icon}${esc(label)}${OUT}</a>`;
+const outLink = (href, label, icon = "") => `<a href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(label)} (opens in a new tab)" title="${esc(label)}">${icon}<span class="nl">${esc(label)}</span>${OUT}</a>`;
 // Each link carries a small icon: the app's own icon for a project, SoundCloud's and GitHub's marks for theirs.
 const navIcon = s => s.icon ? `<img class="ni" src="${esc(s.icon)}" alt="">` : `<span class="ni glyph" aria-hidden="true">${esc(s.glyph || s.name[0])}</span>`;
 document.getElementById("nav").innerHTML = SITE.sections.filter(s => !s.footer).map(s => s.type === "soundcloud"
   ? outLink(`https://soundcloud.com/${s.user}`, s.short || s.name, ICONS.soundcloud.replace("<svg", '<svg class="ni"'))
-  : `<a href="#${esc(s.id)}">${navIcon(s)}${esc(s.short || s.name)}</a>`).join("") + outLink(SITE.github, "GitHub", ICONS.github.replace("<svg", '<svg class="ni"'));
+  : `<a href="#${esc(s.id)}" aria-label="${esc(s.short || s.name)}" title="${esc(s.short || s.name)}">${navIcon(s)}<span class="nl">${esc(s.short || s.name)}</span></a>`).join("") + outLink(SITE.github, "GitHub", ICONS.github.replace("<svg", '<svg class="ni"'));
 const navLinks = [...document.querySelectorAll("#nav a[href^='#']")];
+// Where the names don't all fit beside "Max Mockett" (narrow windows, or the panel taking the right of the page),
+// the menu shows the icons alone, larger, each still named for screen readers and on hover.
+const hdrEl = document.querySelector(".hdr"), navEl = document.getElementById("nav");
+function fitNav() {
+  hdrEl.classList.remove("compact");
+  const open = document.body.classList.contains("open") && innerWidth > 760;
+  const room = (open ? innerWidth - Math.min(520, innerWidth * 0.42) : innerWidth) - 24;
+  if (navEl.getBoundingClientRect().left + navEl.scrollWidth > room) hdrEl.classList.add("compact");
+}
+addEventListener("resize", fitNav); document.fonts?.ready.then(fitNav);
 const hint = document.getElementById("hint");
 hint.innerHTML = `<a href="#credits">Credits</a>`;
 
@@ -443,11 +458,11 @@ function route() {
   const id = decodeURIComponent(location.hash.slice(1));
   const s = SITE.sections.find(x => x.id === id);
   navLinks.forEach(a => a.classList.toggle("on", a.getAttribute("href") === "#" + id));
-  if (!s) { document.body.classList.remove("open"); table?.close(); return; }
+  if (!s) { document.body.classList.remove("open"); table?.close(); fitNav(); return; }
   if (document.body.classList.contains("flat")) { document.getElementById(id)?.scrollIntoView(); return; }
   fillPanel(s);
   document.body.classList.add("open");
-  document.body.classList.toggle("proj", s.type === "project");
+  document.body.classList.toggle("proj", s.type === "project"); fitNav();
   if (s.type === "project" && table) table.open(id); else table?.close();
 }
 addEventListener("hashchange", route);

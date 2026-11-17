@@ -135,15 +135,16 @@ export async function build(ctx) {
   const normals = tex(A + "water_normal.png", { srgb: false, repeat: [1, 1] });
   const soft = ctx.look === "memory";
   // Rings from the stone, kept as data so the pastel water can bend its reflection with them: x, z, start, speed.
-  const NR = 12, rings = Array.from({ length: NR }, () => new THREE.Vector4(0, 0, -99, 0));
-  let ringI = 0;
+  // Up to LIVE rings spread at once. Past that the oldest is let go quickly (fading over 0.35 s) rather than cut off,
+  // so the pool has spare slots for the new ones meanwhile. ringEnd: when each ring has faded out.
+  const NR = 24, LIVE = 14, LIFE = 2.4, rings = Array.from({ length: NR }, () => new THREE.Vector4(0, 0, -99, 0)), ringEnd = new Float32Array(NR).fill(-99);
   let water;
   {
     // A real mirror: the gate, trees and room reflected in the pond, rippled by Skim's wave normals and
     // pushed about by each ring the stone leaves.
     water = new Reflector(new THREE.CircleGeometry(1.0, 72), { textureWidth: phone ? 512 : 1024, textureHeight: phone ? 512 : 1024, clipBias: 0.002, multisample: phone ? 0 : 4, shader: {
       name: "PondShader",
-      uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, uTime: { value: 0 }, uN: { value: null }, uRings: { value: [] } },
+      uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, uTime: { value: 0 }, uN: { value: null }, uRings: { value: [] }, uEnd: { value: null } },
       vertexShader: `uniform mat4 textureMatrix; varying vec4 vUv; varying vec3 vW; varying vec2 vL;
         #include <common>
         #include <logdepthbuf_pars_vertex>
@@ -151,7 +152,7 @@ export async function build(ctx) {
           gl_Position = projectionMatrix * viewMatrix * w;
           #include <logdepthbuf_vertex>
         }`,
-      fragmentShader: `uniform sampler2D tDiffuse, uN; uniform float uTime; uniform vec4 uRings[${NR}];
+      fragmentShader: `uniform sampler2D tDiffuse, uN; uniform float uTime; uniform vec4 uRings[${NR}]; uniform float uEnd[${NR}];
         varying vec4 vUv; varying vec3 vW; varying vec2 vL;
         #include <logdepthbuf_pars_fragment>
         void main(){
@@ -165,9 +166,9 @@ export async function build(ctx) {
           float crest = 0.;
           for (int i = 0; i < ${NR}; i++) {
             vec4 r = uRings[i]; float age = uTime - r.z;
-            if (age < 0. || age > 2.4) continue;
+            if (age < 0. || age > 2.4 || uTime > uEnd[i]) continue;
             vec2 v = p - r.xy; float d = length(v) + 1e-4, R = .01 + age * r.w, x = d - R, w = .018 + age * .012;
-            float A = pow(1. - age / 2.4, 2.), e = exp(-x * x / (w * w)), k = 130.;
+            float A = pow(1. - age / 2.4, 2.) * clamp((uEnd[i] - uTime) / .35, 0., 1.), e = exp(-x * x / (w * w)), k = 130.;
             float h = A * sin(k * x) * e, dh = A * (k * cos(k * x) - 2. * x / (w * w) * sin(k * x)) * e;
             n += v / d * dh * .0003; crest += max(h, 0.);
           }
@@ -181,7 +182,7 @@ export async function build(ctx) {
           #include <colorspace_fragment>
         }`
     } });
-    const u = water.material.uniforms; u.uTime = ctx.T; u.uN.value = normals; u.uRings.value = rings;
+    const u = water.material.uniforms; u.uTime = ctx.T; u.uN.value = normals; u.uRings.value = rings; u.uEnd.value = ringEnd;
     normals.wrapS = normals.wrapT = THREE.RepeatWrapping;
     // The mirror only needs this diorama: the others are hidden while it draws.
     const mirror = water.onBeforeRender;
@@ -266,7 +267,17 @@ export async function build(ctx) {
   // In the pastel look the water itself ripples; elsewhere rings are drawn on it.
   const rings3 = null;
   const rip = {
-    add(x, z, t, size = 0.12) { rings3?.add(x, z, t, size); rings[ringI].set(x, z, t, size); ringI = (ringI + 1) % NR; },
+    add(x, z, t, size = 0.12) {
+      rings3?.add(x, z, t, size);
+      const live = []; let free = -1;
+      for (let i = 0; i < NR; i++) { if (t < ringEnd[i] && t - rings[i].z < LIFE) live.push(i); else if (free < 0) free = i; }
+      if (live.length >= LIVE) {                               // full: let the oldest go, quickly
+        const old = live.reduce((a, b) => (rings[a].z < rings[b].z ? a : b));
+        ringEnd[old] = Math.min(ringEnd[old], t + 0.35);
+      }
+      if (free < 0) return;                                    // every slot still fading: skip this one
+      rings[free].set(x, z, t, size); ringEnd[free] = t + LIFE;
+    },
     update(t) { rings3?.update(t); }
   };
   const stone = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 10), std("#8f8c86", { roughness: 0.5 }));
