@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { std, shadows, fetchBinary, tex } from "../lib/kit.js";
+import { ambience } from "../lib/sound.js";
 
 const A = "assets/aquarium/";
 const W = 2.2, H = 1.25, D = 1.4, Y0 = 0.34;     // tank inside, and its floor's height
@@ -205,12 +206,14 @@ export async function build(ctx) {
   fish.forEach(f => { f.q.setFromUnitVectors(fwd, dir.copy(f.v).normalize()); place(f); });
   meshes.forEach(m => m.instanceMatrix.needsUpdate = true);
 
+  const tank = ambience("assets/sound/aquarium-tank.m4a", 0.38);       // the app's own tank ambience
   return {
     group: g,
     footprint: 1.4,
     view: { fit: 1.28, elev: 12, lookY: 0.9, aspectH: 0.6 },
     hit: [hitBox],
-    update(t, dt) {
+    update(t, dt, focused) {
+      tank.set(!!focused);
       if (reduced && this._done) return;
       this._done = true;
       dt = Math.min(dt || 0.016, 0.05);

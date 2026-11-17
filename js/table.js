@@ -1,6 +1,7 @@
 // The table: one three.js scene holding a diorama per project. Click one to fly in; its panel opens beside it.
 import * as THREE from "three";
 import { ease, loaded, TEX_BYTES } from "./lib/kit.js";
+import { unlock } from "./lib/sound.js";
 import { useLook } from "./looks.js";
 
 const DIORAMAS = {
@@ -187,6 +188,8 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     canvas.style.cursor = hot ? "pointer" : scrolls() ? "grab" : "default";
     onHover?.(hot?.p);
   });
+  // Browsers keep sound off until the page is pressed: any press or key wakes it.
+  addEventListener("pointerdown", unlock, { capture: true }); addEventListener("keydown", unlock, { capture: true });
   canvas.addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, t: performance.now(), t0: e.timeStamp, pan };
     // With shift held, a drag turns the model freely: the open one, or on the table the one under the pointer.
     if (e.shiftKey) { const s = focus || cast(e, hitboxes())?.object.userData.stand; if (s?.spin) { down.spin = { s, yaw: s.yaw, pitch: s.pitch }; return; } }

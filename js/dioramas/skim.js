@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { Reflector } from "three/addons/objects/Reflector.js";
 import { loadSKM1, skmGeometry, splitGroups } from "../lib/skm1.js";
 import { tex, std, shadows } from "../lib/kit.js";
+import { play, ambience } from "../lib/sound.js";
 
 const A = "assets/skim/";
 const Y_W = 0.40;      // water level
@@ -291,16 +292,18 @@ export async function build(ctx) {
     const dir = end.clone().sub(from);
     const hops = []; let u = 0, len = 0.32;
     for (let i = 0; i < 6; i++) { hops.push([u, u + len]); u += len; len *= 0.72; }
-    path = { t0: t, from, dir, hops: hops.map(h => [h[0] / u, h[1] / u]), hit: 0, dur: 0.3 };
+    path = { t0: t, from, dir, hops: hops.map(h => [h[0] / u, h[1] / u]), hit: 0, dur: 0.3, thrown: !!to };
   }
 
   let wind = 0; const wp = new THREE.Vector3();
+  const shore = ambience("assets/sound/skim-shoreside.m4a", 0.42);    // Max's own recording of the lakeside, as the game plays it
   return {
     group: g,
     footprint: RIM,
     view: { fit: 1.5, elev: 30, lookY: 0.42 },
     hit: [water],
     update(t, dt, focused) {
+      shore.set(!!focused);
       if (!reduced && water.material.uniforms?.time) water.material.uniforms.time.value = t * 0.35;
       // Wind: only while it's the one you're looking at, easing in and out.
       wind += ((focused && !reduced ? 1 : 0) - wind) * Math.min(1, (dt || 0.016) * 2);
@@ -315,7 +318,11 @@ export async function build(ctx) {
         if (i >= path.hops.length) { path = null; next = t + 3; stone.visible = false; }
         else {
           const [a, b] = path.hops[i], f = k - i, u = a + (b - a) * f;
-          if (i >= path.hit) { const x = path.from.x + path.dir.x * a, z = path.from.y + path.dir.y * a; rip.add(x, z, t, 0.12 * (1 - i * 0.1)); path.hit = i + 1; }
+          if (i >= path.hit) {
+            const x = path.from.x + path.dir.x * a, z = path.from.y + path.dir.y * a; rip.add(x, z, t, 0.12 * (1 - i * 0.1)); path.hit = i + 1;
+            // Skim's own splashes, for a stone you threw (the idle throws stay quiet), softer at each skip.
+            if (path.thrown) play(`assets/sound/skim-splash-${1 + Math.floor(Math.random() * 4)}.m4a`, { gain: 0.8 * Math.pow(0.78, i), rate: 0.94 + Math.random() * 0.12 });
+          }
           stone.visible = true;
           stone.position.set(path.from.x + path.dir.x * u, Y_W + 0.01 + Math.sin(Math.PI * f) * 0.12 * (1 - i * 0.15), path.from.y + path.dir.y * u);
           stone.rotation.y = t * 25;

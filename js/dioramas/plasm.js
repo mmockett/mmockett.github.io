@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { std, shadows, canvasTex, fontsReady } from "../lib/kit.js";
+import { tone } from "../lib/sound.js";
 
 const CELL = 0.26, N = 5, BOARD_Z = 0.15, TOP = 0.32;
 const C = 1, M = 2, Y = 4;
@@ -216,12 +217,27 @@ export async function build(ctx) {
   function reset() { gel.visible = true; pos = [...L.start]; got = 0; won = 0; history = []; anim = null; placeGel(cellPos(...pos), 1); setGel(); drawCRT(); }
   function setGel() { const c = paint(gelColour(got)); gel.material.color.copy(c); gel.material.emissive.copy(c).multiplyScalar(got ? 0.25 : 0); if (exitGlow) exitGlow.material.opacity = got === 7 ? 0.9 : 0.25; }
   function placeGel(p, sq) { gel.position.set(p.x, TOP + 0.1 * sq, p.z); gel.scale.set(1 / Math.sqrt(sq), sq, 1 / Math.sqrt(sq)); }
+  // PLASM's own sounds (glooplab's juice.ts), for the moves you make; when it plays itself it stays quiet.
+  const NOTE = { 1: 261.63, 2: 392.0, 4: 329.63 };                      // cyan, magenta, yellow: C4, G4, E4
+  const sfx = {
+    stop(cells, held) {                                                 // the knock at the end of a slide: further, heavier
+      const k = Math.min(1, Math.max(0, (cells - 1) / 8)), m = Math.min(1, held / 3), f = (104 + 150 * k) * (1 - 0.18 * m);
+      tone(f, (0.055 + 0.055 * k) * (1 + 0.35 * m), "sine", (0.030 + 0.085 * k) * (1 + 0.18 * m), f * 0.55);
+    },
+    tint(bit) { tone((NOTE[bit] || 261.63) * 2, 0.16, "sine", 0.11); },  // a channel arriving: its note, an octave up
+    bump() { tone(160, 0.09, "sine", 0.09, 90); },                      // nowhere to go
+    exit() {                                                            // white into the exit: the chord, then the climb
+      [261.63, 329.63, 392.0].forEach((f, i) => setTimeout(() => tone(f, 0.22, "sine", 0.12), i * 45));
+      [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.16, "sine", 0.14), 160 + i * 90));
+    }
+  };
+  const held = b => (b & 1) + ((b >> 1) & 1) + ((b >> 2) & 1);
   function move(d, t, user) {
     if (anim || won) return;
     if (user) lastUser = t;
-    const r = slide(L, pos, got, d); if (!r.path.length) { anim = { t0: t, dur: 0.18, from: cellPos(...pos), to: cellPos(...pos), bump: DIRS[d], path: [] }; return; }
+    const r = slide(L, pos, got, d); if (!r.path.length) { anim = { t0: t, dur: 0.18, from: cellPos(...pos), to: cellPos(...pos), bump: DIRS[d], path: [] }; if (user) sfx.bump(); return; }
     history.push({ pos: [...pos], got });
-    anim = { t0: t, dur: 0.1 + r.path.length * 0.075, from: cellPos(...pos), to: cellPos(...r.pos), path: r.path, after: r };
+    anim = { t0: t, dur: 0.1 + r.path.length * 0.075, from: cellPos(...pos), to: cellPos(...r.pos), path: r.path, after: r, user };
   }
   function press(i, t) {
     keys[i].userData.press = 1;
@@ -258,12 +274,15 @@ export async function build(ctx) {
             // Crossing a well: it flares and splashes its ink, and the gel jolts as it takes the colour.
             wellMeshes[key].userData.hitAt = t; gelHit = t;
             splash(cellPos(...anim.path[j]), WELL_COL[w], t);
-            if (!(got & w)) { got |= w; setGel(); drawCRT(); }
+            if (!(got & w)) { got |= w; setGel(); drawCRT(); if (anim.user) sfx.tint(w); }
           }
           anim.seen = Math.max(anim.seen || 0, reached);
         }
         if (k >= 1) {
-          if (anim.after) { pos = anim.after.pos; got = anim.after.got; setGel(); if (pos[0] === L.exit[0] && pos[1] === L.exit[1] && got === 7) {
+          if (anim.after) { pos = anim.after.pos; got = anim.after.got; setGel();
+            const atExit = pos[0] === L.exit[0] && pos[1] === L.exit[1] && got === 7;
+            if (anim.user) { if (atExit) sfx.exit(); else sfx.stop(anim.path.length, held(got)); }
+            if (atExit) {
             won = 1; wonAt = t; drawCRT();
             // Done: the exit flares, the gel drops into it, and rings of all three inks spread from it.
             const ep = cellPos(...L.exit);

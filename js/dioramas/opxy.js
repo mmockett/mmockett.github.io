@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { std, canvasTex, fontsReady } from "../lib/kit.js";
+import { audio, running, out } from "../lib/sound.js";
 
 const DW = 731, DD = 262;                 // the diagram's outline, in its own units
 const W = 2.5, U = W / DW, D = DD * U;    // world size of the body
@@ -130,7 +131,7 @@ export async function build(ctx) {
     const shaft = new THREE.Mesh(shaftGeo, shaftMat); shaft.position.y = SH / 2; shaft.castShadow = true; e.add(shaft);
     const cap = new THREE.Mesh(capGeo, std(SHADES[i], { roughness: 0.42, metalness: 0.1 })); cap.position.y = SH + CH / 2 - 0.004; cap.castShadow = true; e.add(cap);
     e.position.set(X(x), TOPY, Z(51.8)); g.add(e);
-    shaft.userData.enc = i; cap.userData.enc = i; e.userData.cap = cap; e.userData.value = [0.55, 0.25, 0.4, 0.7][i]; e.rotation.y = -e.userData.value * 4.5 + 2.25;
+    shaft.userData.enc = i; cap.userData.enc = i; e.userData.cap = cap; e.userData.value = [0, 0.22, 0.46, 0.28][i];   // Nexus's page one at its default preset: shape, detune, bright, reso e.rotation.y = -e.userData.value * 4.5 + 2.25;
     return e;
   });
 
@@ -144,19 +145,44 @@ export async function build(ctx) {
   });
   const sw = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.03, 0.05), std("#7a7a7a", { metalness: 0.6 })); sw.position.set(W / 2 + 0.003, BASE + H * 0.5, -0.4); g.add(sw);
 
-  // Sound: a small two-oscillator voice, shaped by the encoders
-  let ac = null;
-  function voice(semi, t) {
+  // Sound: Nexus, Max's two-layer polysynth after the CS-80, at its default preset, its first page on the four
+  // encoders (shape, detune, bright, reso; chorus 0.45 and swell 0.8 fixed as the preset has them). Each note plays
+  // two layers a few cents apart, a saw that the shape knob turns towards a pulse, through a resonant low-pass that
+  // starts dark and swells open over about a second; a vibrato arrives a little later, and a slow chorus sways the
+  // two layers between left and right. The amp envelope is the preset's: a soft attack, held, a long release.
+  const CHORUS = 0.45, SWELL = 0.8;
+  let sway = null;
+  function voice(semi) {
+    const ac = audio(); if (!running()) return;
     try {
-      ac = ac || new AudioContext();
-      const now = ac.currentTime, f = 174.61 * Math.pow(2, semi / 12);
-      const [cut, res, dec, lvl] = encs.map(e => e.userData.value);
-      const out = ac.createGain(), filt = ac.createBiquadFilter();
-      filt.type = "lowpass"; filt.Q.value = 0.5 + res * 14;
-      filt.frequency.setValueAtTime(300 + cut * 6000, now); filt.frequency.exponentialRampToValueAtTime(200 + cut * 900, now + 0.2 + dec * 1.2);
-      out.gain.setValueAtTime(0.0001, now); out.gain.exponentialRampToValueAtTime(0.18 * lvl + 0.02, now + 0.008); out.gain.exponentialRampToValueAtTime(0.0001, now + 0.25 + dec * 1.8);
-      [-6, 6].forEach(det => { const o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = f; o.detune.value = det; o.connect(filt); o.start(now); o.stop(now + 0.3 + dec * 1.9); });
-      filt.connect(out).connect(ac.destination);
+      const now = ac.currentTime, f = 174.61 * Math.pow(2, semi / 12), hold = 0.55;
+      const [shape, detune, bright, reso] = encs.map(e => e.userData.value);
+      const cents = 30 * Math.pow(detune, 1.5);
+      const rest = 80 * Math.pow(200, bright) * Math.pow(f / 261.6, 0.5);           // the resting cutoff, keyed to the note
+      const amp = ac.createGain(); amp.gain.setValueAtTime(0.0001, now);
+      amp.gain.exponentialRampToValueAtTime(0.13, now + 0.06); amp.gain.setTargetAtTime(0.13 * 0.9, now + 0.06, 0.4);
+      amp.gain.setTargetAtTime(0.0001, now + hold, 0.25);
+      amp.connect(out());
+      if (!sway) {                                                                    // one chorus clock for every voice
+        const lfo = ac.createOscillator(); lfo.frequency.value = 0.9; sway = ac.createGain(); sway.gain.value = CHORUS * 0.55; lfo.connect(sway); lfo.start();
+      }
+      const vib = ac.createOscillator(), vibAmt = ac.createGain(); vib.frequency.value = 5.3;
+      vibAmt.gain.setValueAtTime(0, now); vibAmt.gain.linearRampToValueAtTime(6, now + 0.9); vib.connect(vibAmt); vib.start(now); vib.stop(now + hold + 1.6);
+      [-1, 1].forEach(side => {
+        const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.Q.value = 0.8 + reso * 9 * (0.6 + 0.4 * SWELL);
+        lp.frequency.setValueAtTime(rest * 0.35, now);                                // swell: dark at the start…
+        lp.frequency.setTargetAtTime(Math.min(16000, rest * (1 + 2 * SWELL)), now, 0.35);   // …blooming to near three times the cutoff
+        lp.frequency.setTargetAtTime(rest * 0.35, now + hold, 0.3);                   // and closing as it fades
+        const pan = ac.createStereoPanner(); pan.pan.value = side * 0.18;
+        const flip = ac.createGain(); flip.gain.value = side; sway.connect(flip); flip.connect(pan.pan);
+        lp.connect(pan); pan.connect(amp);
+        [["sawtooth", 1 - shape], ["square", shape]].forEach(([type, level]) => {
+          if (level < 0.02) return;
+          const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f;
+          o.detune.value = side * cents / 2 + (Math.random() - 0.5) * 2; vibAmt.connect(o.detune);
+          g.gain.value = 0.5 * level; o.connect(g).connect(lp); o.start(now); o.stop(now + hold + 1.6);
+        });
+      });
     } catch { /* no audio: the keys still move */ }
   }
 
@@ -196,7 +222,7 @@ export async function build(ctx) {
         dragEnc = null;
         if (hit?.object === keyMesh && hit.instanceId !== undefined) {
           const k = keys[hit.instanceId]; press[hit.instanceId] = 1; placeKey(hit.instanceId);
-          if (k.note !== undefined) voice(k.note, t);       // only the keyboard plays; the other keys just press
+          if (k.note !== undefined) voice(k.note);       // only the keyboard plays; the other keys just press
         } else if (hit?.object.userData.enc !== undefined) { const en = encs[hit.object.userData.enc]; en.userData.value = (en.userData.value + 0.1) % 1; en.rotation.y = -en.userData.value * 4.5 + 2.25; }
       }
     }
