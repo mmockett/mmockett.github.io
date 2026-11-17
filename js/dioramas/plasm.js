@@ -196,6 +196,13 @@ export async function build(ctx) {
   const ringGeo = new THREE.RingGeometry(0.86, 1, 48); ringGeo.rotateX(-Math.PI / 2);
   const rings = Array.from({ length: 8 }, () => {
     const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+    // Kept to the tray: anything of the ring past the playing surface's edge is not drawn.
+    const H = (N * CELL + 0.05) / 2;
+    m.material.onBeforeCompile = sh => {
+      sh.uniforms.uRing = { value: m.matrix };
+      sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\nuniform mat4 uRing; varying vec2 vR;").replace("#include <begin_vertex>", "#include <begin_vertex>\nvR = (uRing * vec4(position, 1.)).xz;");
+      sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\nvarying vec2 vR;").replace("#include <map_fragment>", `if (abs(vR.x) > ${H.toFixed(4)} || abs(vR.y - ${BOARD_Z.toFixed(4)}) > ${H.toFixed(4)}) discard;\n#include <map_fragment>`);
+    };
     m.visible = false; m.renderOrder = 3; root.add(m); return { m, t0: -9, size: 0.2, life: 0.6 };
   });
   let ri = 0;

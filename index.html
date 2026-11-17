@@ -233,7 +233,6 @@ const SITE = {
       id: "skim", type: "project", diorama: "skim", name: "Skim",
       logo: '<span class="logo logo-skim">Skim</span>', platform: "iPhone game", kind: "iPhone game · 2026",
       icon: "media/skim-icon.jpg",
-      hint: "Click the water to throw a stone",
       lede: "Skip stones across real lakes.",
       text: ["Throw a stone, then tap each time it touches the water to keep it skimming. The lakes are modelled on real places, from Loweswater in the Lake District to Lake Ashi in Japan, at different times of day and through the seasons."],
       offers: [
@@ -260,7 +259,6 @@ const SITE = {
       id: "plasm", type: "project", diorama: "plasm", name: "PLASM",
       logo: '<span class="logo logo-plasm"><svg viewBox="0 0 122 31" aria-hidden="true"><defs><linearGradient id="plasm-g" gradientUnits="userSpaceOnUse" x1="4" y1="0" x2="118" y2="0"><stop offset="0" stop-color="#4fa8ff"/><stop offset=".3" stop-color="#8a5cff"/><stop offset=".55" stop-color="#ff45c8"/><stop offset=".8" stop-color="#ff6a86"/><stop offset="1" stop-color="#ffae3d"/></linearGradient></defs><g fill="none" stroke="url(#plasm-g)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 26V5.5h8.5a6.3 6.3 0 0 1 0 12.6H6"/><path d="M30 5.5V25.5h11"/><path d="M50 26V14a8 8 0 0 1 16 0v12M50 18.5h16"/><path d="M91 5.5H80.5a5 5 0 0 0 0 10h5a5 5 0 0 1 0 10H74.5"/><path d="M99 26V5.5l8.5 11 8.5-11V26"/></g></svg></span>', platform: "iPhone and iPad", kind: "iPhone and iPad · 2026",
       icon: "media/plasm-icon.jpg",
-      hint: "Swipe, or use the arrow keys, to slide the gel",
       lede: "A maze game about mixing colours.",
       text: ["Swipe, and the gel slides until something stops it. Wells tint it, membranes only let one colour through, filters take a colour out and mirrors invert it. Collect cyan, magenta and yellow to turn white, the only colour the exit accepts."],
       offers: [
@@ -282,7 +280,6 @@ const SITE = {
       id: "op-xy", type: "project", diorama: "opxy", name: "OP–XY instruments",
       logo: '<span class="logo logo-xy"><svg viewBox="0 0 92 22" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="11" r="8"/><path d="M24 19V3h6a5 5 0 0 1 0 10h-6"/><path d="M40 11h8"/><path d="M54 3l14 16M68 3L54 19"/><path d="M74 3l7 8 7-8M81 11v8"/></g></svg></span>', short: "OP–XY", platform: "Instruments", kind: "Firmware for the teenage engineering OP–XY",
       glyph: "XY",
-      hint: "Play the keys. Drag the encoders",
       lede: "Synths, drum machines and effects that run on the OP–XY.",
       text: ["New instruments for the OP–XY, each with its own screen drawn for the device. They're grouped into collections, and most install from the open-xy.com builder."],
       offers: [
@@ -315,7 +312,6 @@ const SITE = {
       id: "spirit-aquarium", type: "project", diorama: "aquarium", name: "Spirit Aquarium",
       logo: '<span class="logo logo-aq">Spirit Aquarium</span>', short: "Spirit Aquarium", platform: "iPhone and iPad", kind: "iPhone and iPad · 2025",
       icon: "media/aquarium-icon.jpg",
-      hint: "Some of the fish follow you. Click to drop in food",
       lede: "A calm aquarium of fish spirits to feed and look after.",
       text: ["Feed the fish and watch them school, grow up and have young. Each fish has a name, an age, and its own hunger and mood. Collect new species, tanks and accessories as the aquarium grows."],
       offers: [
@@ -410,8 +406,7 @@ document.getElementById("nav").innerHTML = SITE.sections.filter(s => !s.footer).
   : `<a href="#${esc(s.id)}">${esc(s.short || s.name)}</a>`).join("") + outLink(SITE.github, "GitHub");
 const navLinks = [...document.querySelectorAll("#nav a[href^='#']")];
 const hint = document.getElementById("hint");
-const BASE_HINT = phone ? "Swipe for more, tap to look closer" : "Click a model to look closer";
-hint.innerHTML = `${BASE_HINT} · <a href="#credits">Credits</a>`;
+hint.innerHTML = `<a href="#credits">Credits</a>`;
 
 /* Panel */
 const panel = document.getElementById("panel"), pbody = document.getElementById("pbody");
@@ -440,13 +435,12 @@ function route() {
   const id = decodeURIComponent(location.hash.slice(1));
   const s = SITE.sections.find(x => x.id === id);
   navLinks.forEach(a => a.classList.toggle("on", a.getAttribute("href") === "#" + id));
-  if (!s) { document.body.classList.remove("open"); table?.close(); hint.innerHTML = `${BASE_HINT} · <a href="#credits">Credits</a>`; return; }
+  if (!s) { document.body.classList.remove("open"); table?.close(); return; }
   if (document.body.classList.contains("flat")) { document.getElementById(id)?.scrollIntoView(); return; }
   fillPanel(s);
   document.body.classList.add("open");
   document.body.classList.toggle("proj", s.type === "project");
   if (s.type === "project" && table) table.open(id); else table?.close();
-  hint.textContent = phone ? (s.hint || "").replace(/\bClick\b/g, "Tap").replace(/\bclick\b/g, "tap") : (s.hint || "");
 }
 addEventListener("hashchange", route);
 // Step through the projects in table order, wrapping round.

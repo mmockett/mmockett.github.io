@@ -166,6 +166,11 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   }
   const hitboxes = () => stands.filter(s => s.hitbox).map(s => s.hitbox);
   canvas.addEventListener("pointermove", e => {
+    if (down?.spin) {                                         // shift-dragging a model round
+      const sp = down.spin, s = sp.s;
+      s.yaw = sp.yaw + (e.clientX - down.x) * 0.009; s.pitch = THREE.MathUtils.clamp(sp.pitch + (e.clientY - down.y) * 0.006, -0.55, 0.7);
+      s.spunAt = performance.now(); canvas.style.cursor = "grabbing"; return;
+    }
     if (focus?.d) {
       const h = cast(e, focus.d.hit || []);
       focus.d.pointer?.(down ? "drag" : "move", h, T.value, e, down && { dx: e.clientX - down.x, dy: e.clientY - down.y });
@@ -182,9 +187,12 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     onHover?.(hot?.p);
   });
   canvas.addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, t: performance.now(), t0: e.timeStamp, pan };
+    // With shift held, a drag turns the model freely: the open one, or on the table the one under the pointer.
+    if (e.shiftKey) { const s = focus || cast(e, hitboxes())?.object.userData.stand; if (s?.spin) { down.spin = { s, yaw: s.yaw, pitch: s.pitch }; return; } }
     if (!focus && e.pointerType !== "mouse") { const h = cast(e, hitboxes()); hot = h ? h.object.userData.stand : null; } if (focus?.d) { const h = cast(e, focus.d.hit || []); focus.d.pointer?.("down", h, T.value, e); } });
   canvas.addEventListener("pointerup", e => {
     const d = down; down = null; if (!d) return;
+    if (d.spin) { d.spin.s.spunAt = performance.now(); canvas.style.cursor = "grab"; return; }
     const dx = e.clientX - d.x, dy = e.clientY - d.y, moved = Math.hypot(dx, dy);
     if (focus?.d) {
       const h = cast(e, focus.d.hit || []);
@@ -200,7 +208,9 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     else if (scrolls()) snapTo(pan - (d.vx || 0) * 260 * worldPerPx());   // a flick carries on to the next model
   });
   canvas.addEventListener("pointerleave", () => { hot = null; focus?.d?.pointer?.("leave", null, T.value); });
+  addEventListener("keyup", e => { if (e.key === "Shift" && !down) canvas.style.cursor = "default"; });
   addEventListener("keydown", e => {
+    if (e.key === "Shift" && !down) canvas.style.cursor = "grab";
     if (focus?.d?.key && !e.target.closest("input, textarea")) focus.d.key(e, T.value);
     if (!focus && scrolls() && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); snapTo(panTarget + (e.key === "ArrowLeft" ? -SLOT : SLOT)); }
   });
@@ -222,7 +232,10 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       s.d = await (await DIORAMAS.plinth()).build({ ...ctx, project: s.p });
     }
     look?.dress(s.d.group);
-    s.root.add(s.d.group);
+    // The model hangs from a pivot at about its middle, so shift-drag turns it about itself.
+    const cy = s.d.view?.lookY ?? 0.5;
+    s.spin = new THREE.Group(); s.spin.position.y = cy; s.d.group.position.y -= cy; s.spin.add(s.d.group); s.root.add(s.spin);
+    Object.assign(s, { yaw: 0, pitch: 0, spunAt: -1e9 });
     const r = s.d.footprint || 1.4;
     s.hitbox = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 2.4, 16), new THREE.MeshBasicMaterial({ visible: false }));
     s.hitbox.position.y = 1.1; s.hitbox.userData.stand = s; s.root.add(s.hitbox);
@@ -269,6 +282,13 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       const want = !focus && hot === s && !reduced ? 0.12 : 0;
       s.lift += (want - s.lift) * (reduced ? 1 : Math.min(1, dt * 8));
       s.root.position.set(s.base.x, s.lift, s.base.z);
+      if (s.spin) {                                           // after a turn, a short pause, then slowly back to rest
+        if (down?.spin?.s !== s && now - s.spunAt > 900) {
+          s.yaw = Math.atan2(Math.sin(s.yaw), Math.cos(s.yaw));
+          const k = reduced ? 1 : Math.min(1, dt * 1.6); s.yaw -= s.yaw * k; s.pitch -= s.pitch * k;
+        }
+        s.spin.rotation.set(s.pitch, s.yaw, 0);
+      }
       // Only the model you're looking at animates in focus; all of them do on the table.
       if (s.d && (!focus || focus === s || !reduced)) s.d.update?.(T.value, dt, focus === s);
     }

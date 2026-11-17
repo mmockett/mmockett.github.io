@@ -7,7 +7,7 @@ import { std, canvasTex, fontsReady } from "../lib/kit.js";
 
 const DW = 731, DD = 262;                 // the diagram's outline, in its own units
 const W = 2.5, U = W / DW, D = DD * U;    // world size of the body
-const H = 29 / 288 * W;                   // its thickness
+const H = 15 / 288 * W;                   // the body's slab (its 29 mm overall includes the keys standing on it and the feet)
 const BASE = 0.002;                       // the body sits on the table
 const TOPY = BASE + H;
 const X = dx => (dx - DW / 2) * U, Z = dy => (dy - DD / 2) * U;
@@ -57,14 +57,16 @@ export async function build(ctx) {
   const atlas = canvasTex(COLS * CELLPX, Math.ceil(NK / COLS) * CELLPX, (c) => {
     keys.forEach((k, i) => {
       const x = (i % COLS) * CELLPX + CELLPX / 2, y = Math.floor(i / COLS) * CELLPX + CELLPX / 2;
-      c.strokeStyle = "rgba(235,235,235,.85)"; c.lineWidth = 2.5;
+      // The embossed circle is only a faint ring, a little darker on pale keys and lighter on dark ones.
+      const pale = k.shade >= 2;
+      c.strokeStyle = pale ? "rgba(0,0,0,.16)" : "rgba(255,255,255,.13)"; c.lineWidth = 3;
       if (k.dot) {   // the embossed circle, drawn at the note's place (its legend sits there, not at the key's centre)
-        c.fillStyle = "rgba(235,235,235,.22)"; c.beginPath(); c.arc(x, y, 30, 0, 7); c.fill(); c.stroke();
+        c.fillStyle = "rgba(255,255,255,.04)"; c.beginPath(); c.arc(x, y, 30, 0, 7); c.fill(); c.stroke();
         c.fillStyle = "rgba(240,240,240,.92)"; c.font = "400 30px 'IBM Plex Mono', monospace"; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(k.g, x, y + 2);
         return;
       }
-      if (k.shade >= 2) c.strokeStyle = "rgba(40,30,70,.55)";   // dark print on the pale step keys
       c.beginPath(); c.arc(x, y, k.step ? 34 : 40, 0, 7); c.stroke();
+      if (k.step) { c.fillStyle = pale ? "rgba(0,0,0,.28)" : "rgba(0,0,0,.45)"; c.beginPath(); c.arc(x, y - 47, 4.5, 0, 7); c.fill(); }   // its LED, unlit
       if (k.g) { c.fillStyle = k.col || "rgba(240,240,240,.92)"; c.font = `${k.g.length > 1 ? "400 26px" : k.small ? "400 30px" : "400 40px"} 'IBM Plex Mono', monospace`; c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(k.g, x, y + 2); }
     });
   });
@@ -115,17 +117,20 @@ export async function build(ctx) {
   gr.rotation.x = -Math.PI / 2; gr.position.set(X(52), TOPY + 0.001, Z(52)); g.add(gr);
   const vol = new THREE.Mesh(new THREE.CylinderGeometry(13 * U, 13 * U, 0.03, 32), std("#161616", { metalness: 0.4, roughness: 0.4 })); vol.position.set(X(cc(2, 1)[0] - 17 + 13), TOPY + 0.015, Z(31.9)); vol.castShadow = true; g.add(vol);   // its left edge in line with the key below
 
-  // Encoders: the four shades, dark to light, knurled
-  const ENC_X = [370, 450, 529, 609], ENC_COL = SHADES;
-  const ER = 14 * U, EH = 0.05;              // about the size of the volume knob, as on the device
-  const encGeo = new THREE.CylinderGeometry(ER, ER, EH, 72, 1);
-  { const pa = encGeo.attributes.position; for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), z = pa.getZ(i), r = Math.hypot(x, z); if (r > ER * 0.98) { const a = Math.atan2(z, x), k = 1 + 0.04 * Math.sign(Math.sin(a * 24)); pa.setX(i, x * k); pa.setZ(i, z * k); } } encGeo.computeVertexNormals(); }
+  // Encoders: a slim black shaft standing up out of the top, with a cap in one of the four shades, dark to light.
+  // They carry no line; turning shows in the sound.
+  const ENC_X = [370, 450, 529, 609];
+  const SR = 6.5 * U, SH = 0.07, CR = 7.5 * U, CH = 0.04;
+  const shaftGeo = new THREE.CylinderGeometry(SR, SR * 1.05, SH, 32);
+  // The cap: a short cylinder with its top edge rounded over.
+  const capGeo = new THREE.LatheGeometry([[0, -CH / 2], [CR, -CH / 2], [CR, CH / 2 - 0.007], [CR - 0.0015, CH / 2 - 0.002], [CR - 0.006, CH / 2], [0, CH / 2]].map(([x, y]) => new THREE.Vector2(x, y)), 48);
+  const shaftMat = std("#0b0b0b", { roughness: 0.5, metalness: 0.3 });
   const encs = ENC_X.map((x, i) => {
     const e = new THREE.Group();
-    const m = new THREE.Mesh(encGeo, std(ENC_COL[i], { roughness: 0.45, metalness: 0.15 })); m.position.y = EH / 2; m.castShadow = true; e.add(m);
-    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.002, 10 * U), new THREE.MeshBasicMaterial({ color: i < 2 ? "#e8e8e8" : "#111" })); notch.position.set(0, EH + 0.0015, -5 * U); e.add(notch);
+    const shaft = new THREE.Mesh(shaftGeo, shaftMat); shaft.position.y = SH / 2; shaft.castShadow = true; e.add(shaft);
+    const cap = new THREE.Mesh(capGeo, std(SHADES[i], { roughness: 0.42, metalness: 0.1 })); cap.position.y = SH + CH / 2 - 0.004; cap.castShadow = true; e.add(cap);
     e.position.set(X(x), TOPY, Z(51.8)); g.add(e);
-    m.userData.enc = i; notch.userData.enc = i; e.userData.value = [0.55, 0.25, 0.4, 0.7][i]; e.rotation.y = -e.userData.value * 4.5 + 2.25;
+    shaft.userData.enc = i; cap.userData.enc = i; e.userData.cap = cap; e.userData.value = [0.55, 0.25, 0.4, 0.7][i]; e.rotation.y = -e.userData.value * 4.5 + 2.25;
     return e;
   });
 
@@ -158,14 +163,14 @@ export async function build(ctx) {
   body.material.userData.pastel = "#bba9ea";
   keyMesh.material.userData.pastel = "#ffffff";
   vol.material.userData.pastel = "#806cc4";
-  encs.forEach((e, i) => { e.children[0].material.userData.pastel = SHADES[i]; });
+  encs.forEach((e, i) => { e.userData.cap.material.userData.pastel = SHADES[i]; });
 
   // While it's the one you're looking at, a playhead walks the sixteen steps (sixteenths at 120 BPM): the step
   // under it dips and swaps to the far end of the shades, the way a lit step reads on the device.
   const steps = keys.map((k, i) => (k.step ? i : -1)).filter(i => i >= 0);
-  const stepCol = steps.map(i => new THREE.Color(SHADES[keys[i].shade]));
-  const lit = steps.map(i => new THREE.Color(keys[i].shade >= 2 ? SHADES[0] : "#ffffff"));
-  const cTmp = new THREE.Color();
+  // The playhead is the step key's own small LED lighting white, at the top of the key, as on the device.
+  const led = new THREE.Mesh(new THREE.CircleGeometry(4.5 / 128 * KS * 0.86, 20), new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0, toneMapped: false, depthWrite: false }));
+  led.rotation.x = -Math.PI / 2; led.renderOrder = 4; g.add(led);
   let playAmp = 0, playAt = -1;
 
   let dragEnc = null, dragStart = 0;
@@ -177,12 +182,9 @@ export async function build(ctx) {
     update(t, dt, focused) {
       playAmp += ((focused && !reduced ? 1 : 0) - playAmp) * Math.min(1, (dt || 0.016) * 4);
       const at = playAmp > 0.01 ? Math.floor(t * 8) % 16 : -1;
-      if (at !== playAt || (playAmp > 0.01 && playAmp < 0.99)) {
-        steps.forEach((i, j) => keyMesh.setColorAt(i, cTmp.copy(stepCol[j]).lerp(lit[j], j === at ? 0.55 * playAmp : 0)));
-        keyMesh.instanceColor.needsUpdate = true;
-        if (at >= 0 && at !== playAt) press[steps[at]] = Math.max(press[steps[at]], 0.45 * playAmp);
-        playAt = at;
-      }
+      led.material.opacity = playAmp; led.visible = at >= 0;
+      if (at >= 0 && at !== playAt) { const k = keys[steps[at]]; led.position.set(X(k.at[0]), TOPY + KH + 0.0012, Z(k.at[1]) - 47 / 128 * KS * 0.86); }
+      playAt = at;
       for (let i = 0; i < NK; i++) if (press[i] > 0.001) { press[i] *= 0.82; placeKey(i); }
       keyMesh.instanceMatrix.needsUpdate = true; legend.instanceMatrix.needsUpdate = true;
     },
