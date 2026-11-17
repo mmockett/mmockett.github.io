@@ -33,6 +33,10 @@ canvas#table { position: fixed; inset: 0; width: 100%; height: 100%; display: bl
 .hdr nav a { font-size: 13px; white-space: nowrap; text-decoration: none; color: var(--muted); padding: 3px 6px; border-radius: 6px; }
 .hdr nav a:hover, .hdr nav a.on { color: var(--ink); background: rgba(0,0,0,.05); }
 .hdr nav .out { width: 9px; height: 9px; margin-left: 3px; vertical-align: 1px; opacity: .75; }
+.hdr nav a { display: inline-flex; align-items: center; }
+.hdr nav .ni { flex: none; width: 15px; height: 15px; margin-right: 6px; border-radius: 4px; box-shadow: 0 0 0 .5px rgba(0,0,0,.12); }
+.hdr nav svg.ni { box-shadow: none; border-radius: 0; }
+.hdr nav .ni.glyph { background: #000; color: #fff; font: 600 7px/15px Inter, sans-serif; text-align: center; letter-spacing: -.02em; }
 /* Previous and next project, while one is open */
 .car { display: none; }
 body.open.proj .car { display: block; }
@@ -352,7 +356,9 @@ const SITE = {
 const ICONS = {
   apple: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.9-.9-3-.8c-1.6 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7c1.3 0 2.1-1.1 2.8-2.3.9-1.3 1.3-2.5 1.3-2.6 0 0-2.5-1-2.5-3.8zM14.1 5.8c.6-.8 1.1-1.8 1-2.8-.9 0-2 .6-2.6 1.4-.6.7-1.1 1.7-1 2.7 1 .1 2-.5 2.6-1.3z"/></svg>',
   github: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 00-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 015 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0012 2z"/></svg>',
-  play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>'
+  play: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+  // SoundCloud's mark, simplified: rising bars into a cloud.
+  soundcloud: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="1" y="13" width="1.4" height="5" rx=".7"/><rect x="3.5" y="11.5" width="1.4" height="6.5" rx=".7"/><rect x="6" y="10" width="1.4" height="8" rx=".7"/><rect x="8.5" y="9" width="1.4" height="9" rx=".7"/><path d="M11 8.2c.9-.5 1.9-.7 2.9-.7 3 0 5.4 2.2 5.8 5.1.3-.1.7-.2 1.1-.2 1.8 0 3.2 1.4 3.2 3.2S22.6 18.8 20.8 18.8H11z"/></svg>'
 };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches || /[?&]still\b/.test(location.search);
@@ -400,10 +406,12 @@ const render = s => (RENDER[s.type] || RENDER.text)(s);
 /* Header */
 // Projects open on the table; Music and GitHub go straight out to SoundCloud and GitHub.
 const OUT = '<svg class="out" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 2.5h5.5V8M9.5 2.5L3 9"/></svg>';
-const outLink = (href, label) => `<a href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(label)} (opens in a new tab)">${esc(label)}${OUT}</a>`;
+const outLink = (href, label, icon = "") => `<a href="${esc(href)}" target="_blank" rel="noopener" aria-label="${esc(label)} (opens in a new tab)">${icon}${esc(label)}${OUT}</a>`;
+// Each link carries a small icon: the app's own icon for a project, SoundCloud's and GitHub's marks for theirs.
+const navIcon = s => s.icon ? `<img class="ni" src="${esc(s.icon)}" alt="">` : `<span class="ni glyph" aria-hidden="true">${esc(s.glyph || s.name[0])}</span>`;
 document.getElementById("nav").innerHTML = SITE.sections.filter(s => !s.footer).map(s => s.type === "soundcloud"
-  ? outLink(`https://soundcloud.com/${s.user}`, s.short || s.name)
-  : `<a href="#${esc(s.id)}">${esc(s.short || s.name)}</a>`).join("") + outLink(SITE.github, "GitHub");
+  ? outLink(`https://soundcloud.com/${s.user}`, s.short || s.name, ICONS.soundcloud.replace("<svg", '<svg class="ni"'))
+  : `<a href="#${esc(s.id)}">${navIcon(s)}${esc(s.short || s.name)}</a>`).join("") + outLink(SITE.github, "GitHub", ICONS.github.replace("<svg", '<svg class="ni"'));
 const navLinks = [...document.querySelectorAll("#nav a[href^='#']")];
 const hint = document.getElementById("hint");
 hint.innerHTML = `<a href="#credits">Credits</a>`;

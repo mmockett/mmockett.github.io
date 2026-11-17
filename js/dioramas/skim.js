@@ -93,15 +93,17 @@ export async function build(ctx) {
           return mix(mix(gh(i), gh(i + vec2(1, 0)), f.x), mix(gh(i + vec2(0, 1)), gh(i + vec2(1, 1)), f.x), f.y); }`;
       sh.vertexShader = sh.vertexShader
         .replace("#include <common>", `#include <common>
-          attribute float aT; uniform float uTime, uWind; varying float vT; varying vec2 vW; ${NOISE}`)
+          attribute float aT; uniform float uTime, uWind; varying float vT; varying vec2 vW; varying vec3 vUp; ${NOISE}`)
         .replace("#include <begin_vertex>", `#include <begin_vertex>
           vT = aT;
-          vec4 wr = modelMatrix * instanceMatrix * vec4(0., 0., 0., 1.); vW = wr.xz;
+          // Patches and wind are worked out where the tuft stands on the model, so they turn with it.
+          vec4 wr = instanceMatrix * vec4(0., 0., 0., 1.); vW = wr.xz;
+          vUp = normalize(normalMatrix * vec3(0., 1., 0.));     // the model's up, in view space
           float sway = (gn(wr.xz * 9. + uTime * vec2(.9, .5)) - .35) * uWind;
           transformed.xz += vec2(.8, .5) * sway * aT * aT * .6;`);
       sh.fragmentShader = sh.fragmentShader
         .replace("#include <common>", `#include <common>
-          varying float vT; varying vec2 vW; ${NOISE}
+          varying float vT; varying vec2 vW; varying vec3 vUp; ${NOISE}
           vec3 ramp(float x){                    // the .blend's colour ramp (0, .345, .623, 1)
             vec3 a = vec3(.061, .061, .232), b = vec3(.152, .358, .143), c = vec3(.353, .545, .248), d = vec3(.587, .699, .269);
             return x < .345 ? mix(a, b, x / .345) : x < .623 ? mix(b, c, (x - .345) / .278) : mix(c, d, (x - .623) / .377); }`)
@@ -111,7 +113,7 @@ export async function build(ctx) {
           diffuseColor.rgb = pow(ramp(n), vec3(2.2)) * mix(.78, 1.08, vT);`)
         // Both faces lit as the ground under them (a double-sided blade's back face would otherwise turn dark).
         .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
-          normal = normalize((viewMatrix * vec4(0., 1., 0., 0.)).xyz);`);
+          normal = normalize(vUp);`);
     };
     const want = phone ? 3200 : 5600, rim0 = 1.105, rim1 = RIM - 0.012;
     const im = new THREE.InstancedMesh(geo, mat, want);
