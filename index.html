@@ -43,6 +43,12 @@ body.open.proj .car { display: block; }
 .car .prev { left: 16px; }
 .car .next { right: calc(min(520px, 42vw) + 16px); }
 @media (max-width: 760px) { .car button { top: calc(21svh + 40px); } .car .next { right: 12px; } .car .prev { left: 12px; } }
+/* The same arrows on the table while it scrolls (narrow windows), level with the models, stepping along the row */
+body.scrolling:not(.open) .car { display: block; }
+body.scrolling:not(.open) .car button { top: var(--row-y, 50%); }
+body.scrolling:not(.open) .car .next { right: 16px; }
+@media (max-width: 760px) { body.scrolling:not(.open) .car .next { right: 12px; } }
+.car button:disabled { opacity: .35; cursor: default; }
 body.dark-hdr .hdr, body.dark-hdr .hint { color: #f0f0ee; }
 body.dark-hdr .hdr p, body.dark-hdr .hdr nav a { color: rgba(240,240,238,.7); }
 @media (max-width: 760px) {
@@ -56,6 +62,15 @@ body.dark-hdr .hdr p, body.dark-hdr .hdr nav a { color: rgba(240,240,238,.7); }
   body.open .hint { display: none; }
 }
 .hint { position: fixed; z-index: 5; left: 16px; bottom: 14px; font: 400 12px "IBM Plex Mono", monospace; color: var(--muted); transition: opacity .3s; }
+
+/* Placeholders while the models load: a faded still, filling with colour from the left as the model's files arrive */
+.holds { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.hold { position: absolute; left: 0; top: 0; aspect-ratio: 1; transition: opacity .7s ease; will-change: transform; }
+.hold img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hold .g { filter: grayscale(1) contrast(.85); opacity: .38; }
+.hold .c { clip-path: inset(0 calc((1 - var(--p, 0)) * 100%) 0 0); }
+.hold.done { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .hold { transition: none; } }
 
 /* Labels under the models */
 #labels .label { position: fixed; left: 0; top: 0; z-index: 3; border: 0; background: none; text-align: center; cursor: pointer; padding: 4px 8px; transition: opacity .35s; white-space: nowrap; }
@@ -435,8 +450,10 @@ const stepProject = d => {
   const ps = SITE.sections.filter(x => x.type === "project"), i = ps.findIndex(x => x.id === decodeURIComponent(location.hash.slice(1)));
   if (i >= 0) location.hash = ps[(i + d + ps.length) % ps.length].id;
 };
-document.getElementById("car-prev").onclick = () => stepProject(-1);
-document.getElementById("car-next").onclick = () => stepProject(1);
+// The arrows step through the open projects, or along the table while it scrolls.
+const carStep = d => document.body.classList.contains("open") ? stepProject(d) : table?.step(d);
+document.getElementById("car-prev").onclick = () => carStep(-1);
+document.getElementById("car-next").onclick = () => carStep(1);
 document.getElementById("close").onclick = () => { history.pushState(null, "", location.pathname + location.search); route(); };
 document.getElementById("home").onclick = e => { e.preventDefault(); history.pushState(null, "", location.pathname + location.search); route(); };
 addEventListener("keydown", e => { if (e.key === "Escape" && !viewer.open && document.body.classList.contains("open")) document.getElementById("close").click(); });
@@ -456,7 +473,13 @@ if (webgl() && !/[?&]flat\b/.test(location.search)) {
   table = mountTable({
     canvas: document.getElementById("table"), labels: document.getElementById("labels"), phone, reduced, look: lookParam === "none" ? null : lookParam,
     projects: SITE.sections.filter(s => s.type === "project"),
-    onDismiss: () => document.getElementById("close").click()
+    onDismiss: () => document.getElementById("close").click(),
+    onRow: ({ scrolls, atStart, atEnd }) => {          // the table scrolls or not; at either end its arrow rests
+      document.body.classList.toggle("scrolling", scrolls);
+      const open = document.body.classList.contains("open");
+      document.getElementById("car-prev").disabled = !open && atStart;
+      document.getElementById("car-next").disabled = !open && atEnd;
+    }
   });
   window.__table = table;
   arrowsStep();

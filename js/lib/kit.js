@@ -1,12 +1,17 @@
 // Small shared helpers for the dioramas.
 import * as THREE from "three";
 
+// Bytes loaded so far for each model, keyed by its asset folder (assets/<folder>/...), for the placeholders on the table.
+export const loaded = {};
+const note = (url, n) => { const m = /assets\/([^/]+)\//.exec(url); if (m) loaded[m[1]] = (loaded[m[1]] || 0) + n; };
+export const TEX_BYTES = 1e5;                      // what a texture counts for (an image load gives no byte count)
+
 const texCache = new Map();
 const loader = new THREE.TextureLoader();
 export function tex(url, { srgb = true, repeat = null, flipY = true } = {}) {
   const key = url + (repeat ? repeat.join("x") : "") + flipY;
   if (texCache.has(key)) return texCache.get(key);
-  const t = loader.load(url);
+  const t = loader.load(url, () => note(url, TEX_BYTES));
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   t.flipY = flipY;
   t.anisotropy = 8;
@@ -74,11 +79,18 @@ export async function fetchBinary(url) {
     const b64 = (await import(new URL(url + ".js", location.href).href)).default;
     const s = atob(b64), out = new Uint8Array(s.length);
     for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    note(url, out.length);
     return out.buffer;
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
-  return r.arrayBuffer();
+  if (!r.body) { const b = await r.arrayBuffer(); note(url, b.byteLength); return b; }
+  // Read it in chunks, counting bytes as they arrive.
+  const reader = r.body.getReader(), parts = []; let size = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); size += value.length; note(url, value.length); }
+  const out = new Uint8Array(size); let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out.buffer;
 }
 
 // Fonts used inside canvases must be loaded before drawing.

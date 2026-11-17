@@ -1,6 +1,6 @@
 // The table: one three.js scene holding a diorama per project. Click one to fly in; its panel opens beside it.
 import * as THREE from "three";
-import { ease } from "./lib/kit.js";
+import { ease, loaded, TEX_BYTES } from "./lib/kit.js";
 import { useLook } from "./looks.js";
 
 const DIORAMAS = {
@@ -11,21 +11,31 @@ const DIORAMAS = {
   plinth: () => import("./dioramas/plinth.js")
 };
 
-export function mountTable({ canvas, projects, labels, phone, reduced, look: lookName, onOpen, onClose, onHover, onDismiss }) {
+// A model's placeholder: a still of it, framed STILL.w world units square around a point STILL.look above its place,
+// from STILL.d away at the overview's 27°. ?still=<id> draws just that model so, on a transparent background, for
+// making the stills (media/stills/<id>.webp; see window.__still below).
+const STILL = { w: 3.3, d: 24, el: 27, look: new THREE.Vector3(0, 0.6, 0.5) };
+// Roughly how many bytes each model's own files come to, so its placeholder can fill as they arrive (kit.js counts
+// them by asset folder); a model with none fills on a timer instead.
+const EXPECT = { skim: 1024892 + 7 * TEX_BYTES, aquarium: 3568952 + TEX_BYTES };
+
+export function mountTable({ canvas, projects, labels, phone, reduced, look: lookName, onOpen, onClose, onHover, onDismiss, onRow }) {
+  const still = new URLSearchParams(location.search).get("still");
+  if (still) { projects = projects.filter(p => p.id === still); reduced = true; labels.style.display = "none"; }
   // The scene is sized from the canvas as laid out, not from the window: on iPhone and iPad (and inside an embedding
   // frame) innerWidth/innerHeight can disagree with the box the canvas fills, or change without a resize event,
   // and either one stretches the picture. A ResizeObserver, and a check each frame, keep the two in step.
   let VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance", alpha: !!still });
   // Drawn at up to twice the screen's resolution: phones at their own (capped at 2), and 1x desktop screens
   // supersampled at 1.5 for smoother edges. The frame loop steps this down if frames run slow.
-  let dpr = phone ? Math.min(devicePixelRatio, 2) : Math.min(Math.max(devicePixelRatio, 1.5), 2);
+  let dpr = still ? 1 : phone ? Math.min(devicePixelRatio, 2) : Math.min(Math.max(devicePixelRatio, 1.5), 2);
   renderer.setPixelRatio(dpr);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
   const BG = new THREE.Color("#e9e4d8");
-  scene.background = BG; scene.fog = new THREE.Fog(BG, 18, 42);
+  scene.background = still ? null : BG;           // no fog: the table is flat page colour, and fog faded the models whenever the camera stood back
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 120);
   const T = { value: 0 };
 
@@ -39,7 +49,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   // and the page around it without a step.
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: "#e9e4d8", toneMapped: false }));
   // The models shade themselves, but cast nothing on the table: they sit on it cleanly.
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; scene.add(ground);
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; ground.visible = !still; scene.add(ground);
   const look = lookName ? useLook(lookName, { renderer, scene, hemi, sun, ground, phone }) : null;
   look?.dress(ground);
 
@@ -48,28 +58,32 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   const stands = projects.map((p, i) => ({ p, i, d: null, root: new THREE.Group(), base: new THREE.Vector3(), lift: 0 }));
   stands.forEach(s => scene.add(s.root));
 
-  // Lay the dioramas out in one gentle arc. Where the whole row would leave each model too small (narrow windows,
-  // phones), the camera shows about one model at a time and you scroll along the row instead: drag, swipe, wheel or
-  // arrow keys, settling on the nearest model.
-  const SLOT = 3.35, n = stands.length, ENDS = (n - 1) / 2 * SLOT;
-  let scroller = false, pan = -ENDS, panTarget = -ENDS, snapTimer = 0;
+  // Lay the dioramas out in one gentle arc. The camera shows the whole row while that leaves each model at least
+  // MIN_PX across; narrower than that it holds the models at that size (down to about one model across on a phone)
+  // and you scroll along the row instead: drag, swipe, wheel or arrow keys, settling on the nearest model. Every
+  // step of this changes continuously with the window's size, so nothing jumps as it is resized.
+  const SLOT = 3.35, n = stands.length, ROW_HALF = (n * SLOT) / 2 + 1.0, MIN_PX = 240;
+  let half = ROW_HALF, panMax = 0, pan = 0, panTarget = 0, snapTimer = 0, started = false, rowKey = "";
   const arcZ = x => -Math.cos(x / 7) * 0.9 + 0.9;
+  const clampPan = x => THREE.MathUtils.clamp(x, -panMax, panMax);
   function layout() {
     stands.forEach((s, i) => { const x = (i - (n - 1) / 2) * SLOT; s.base.set(x, 0, arcZ(x)); s.root.position.copy(s.base); });
-    scroller = VW * SLOT / (n * SLOT + 1.2) < 240;          // each model under ~240 px with the whole row in view
-    if (!scroller) pan = panTarget = 0;
-    else { panTarget = THREE.MathUtils.clamp(panTarget, -ENDS, ENDS); pan = panTarget; }
+    half = THREE.MathUtils.clamp(VW / MIN_PX * SLOT / 2, SLOT * 0.64, ROW_HALF);
+    panMax = ROW_HALF - half;
+    if (!started) { pan = panTarget = -panMax; started = true; }   // first view: from the start of the row
+    pan = clampPan(pan); panTarget = clampPan(panTarget);
   }
-  // The overview camera: the whole row from about 27° up, or (scrolling) one slot and a bit, centred on x.
+  const scrolls = () => panMax > 0.05;
+  // The overview camera, about 27° up, seeing `half` either side of x along the row.
   function overviewAt(x) {
     const vf = THREE.MathUtils.degToRad(camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
-    const half = scroller ? SLOT * 0.64 : (n * SLOT) / 2 + 0.6;
     const dist = Math.max(half / Math.tan(hf / 2), 7), el = THREE.MathUtils.degToRad(27);
-    const look = new THREE.Vector3(x, 0.6, 0.5 + (scroller ? arcZ(x) : 0));
+    const k = (ROW_HALF - half) / (ROW_HALF - SLOT * 0.64);          // 0 seeing the whole row … 1 at one model across
+    const look = new THREE.Vector3(x, 0.6, 0.5 + arcZ(x) * k);       // close in, follow the arc to the model in view
     return { pos: look.clone().add(new THREE.Vector3(0, Math.sin(el) * dist, Math.cos(el) * dist)), look };
   }
-  const snapTo = x => { panTarget = THREE.MathUtils.clamp(Math.round(x / SLOT + (n - 1) / 2), 0, n - 1) * SLOT - ENDS; };
-  const worldPerPx = () => (2 * SLOT * 0.64) / VW;
+  const snapTo = x => { panTarget = clampPan(THREE.MathUtils.clamp(Math.round(x / SLOT + (n - 1) / 2), 0, n - 1) * SLOT - (n - 1) / 2 * SLOT); };
+  const worldPerPx = () => (2 * half) / VW;
 
   // Camera. In focus the projection is shifted (setViewOffset) so the model sits centred in the space the panel leaves,
   // at whatever distance fits its size into that space.
@@ -107,7 +121,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   }
   function close() {
     if (!focus) return; focus.d?.pointer?.("leave", null, T.value);
-    if (scroller) pan = panTarget = focus.base.x;            // back on the row where the model you had open stands
+    if (scrolls()) pan = panTarget = clampPan(focus.base.x);  // back on the row where the model you had open stands
     focus = null; fly(overviewAt(panTarget)); onClose?.();
   }
 
@@ -115,6 +129,36 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   // Each label is the project's own logo where it has one (markup from the page's own SITE data).
   labels.innerHTML = stands.map(s => `<button type="button" class="label" data-id="${s.p.id}" aria-label="${s.p.name}${s.p.platform ? ", " + s.p.platform : ""}"><b>${s.p.logo || s.p.short || s.p.name}</b></button>`).join("");
   const labelEls = [...labels.children];
+
+  // Placeholders: while a model loads, a faded still of it stands in its place, filling with colour from left to
+  // right as its files arrive; once the model is on the table the still fades away. (Current look only: the stills
+  // are of it.)
+  const holds = document.createElement("div"); holds.className = "holds"; labels.before(holds);
+  if (!lookName && !still) stands.forEach(s => {
+    const src = `media/stills/${s.p.id}.webp`, el = document.createElement("div");
+    el.className = "hold"; el.innerHTML = `<img class="g" src="${src}" alt=""><img class="c" src="${src}" alt="">`;
+    el.querySelector("img").onerror = () => { el.remove(); s.hold = null; };
+    holds.append(el); Object.assign(s, { hold: el, shown: 0, born: performance.now(), readyAt: 0 });
+  });
+  const hc = new THREE.Vector3(), hr = new THREE.Vector3(), ha = new THREE.Vector3(), hb = new THREE.Vector3();
+  function placeHolds(now, dt) {
+    hr.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(STILL.w / 2);
+    for (const s of stands) {
+      const el = s.hold; if (!el) continue;
+      const want = s.d ? 1 : EXPECT[s.p.diorama] ? Math.min(0.96, (loaded[s.p.diorama] || 0) / EXPECT[s.p.diorama]) : 0.9 * (1 - Math.exp(-(now - s.born) / 700));
+      s.shown = Math.max(s.shown, s.shown + (want - s.shown) * Math.min(1, dt * 6));
+      el.style.setProperty("--p", s.shown.toFixed(3));
+      hc.copy(s.base).add(STILL.look);
+      ha.copy(hc).sub(hr).project(camera); hb.copy(hc).add(hr).project(camera); hc.project(camera);
+      const w = Math.hypot((hb.x - ha.x) * VW / 2, (hb.y - ha.y) * VH / 2), x = (hc.x * 0.5 + 0.5) * VW, y = (-hc.y * 0.5 + 0.5) * VH;
+      el.style.width = `${w}px`; el.style.transform = `translate(${x - w / 2}px, ${y - w / 2}px)`;
+      if (s.d && s.shown > 0.985) {
+        s.readyAt ||= now;
+        if (now - s.readyAt > 120) el.classList.add("done");     // the model has drawn a few frames under it
+        if (now - s.readyAt > 900) { el.remove(); s.hold = null; }
+      }
+    }
+  }
   labelEls.forEach(el => el.addEventListener("click", () => { location.hash = el.dataset.id; }));
 
   // Pointer
@@ -134,13 +178,13 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       canvas.style.cursor = h ? (focus.d.cursor || "pointer") : "default";
       hot = null; return;
     }
-    if (scroller && down) {                                   // dragging along the row
+    if (scrolls() && down) {                                   // dragging along the row
       const dx = e.clientX - down.x; down.vx = (e.clientX - (down.lx ?? down.x)) / Math.max(1, e.timeStamp - (down.lt ?? down.t0)); down.lx = e.clientX; down.lt = e.timeStamp;
-      if (Math.abs(dx) > 6) { panTarget = pan = THREE.MathUtils.clamp(down.pan - dx * worldPerPx(), -ENDS - 0.8, ENDS + 0.8); hot = null; canvas.style.cursor = "grabbing"; return; }
+      if (Math.abs(dx) > 6) { panTarget = pan = THREE.MathUtils.clamp(down.pan - dx * worldPerPx(), -panMax - 0.8, panMax + 0.8); hot = null; canvas.style.cursor = "grabbing"; return; }
     }
     const h = cast(e, hitboxes());
     hot = h ? h.object.userData.stand : null;
-    canvas.style.cursor = hot ? "pointer" : scroller ? "grab" : "default";
+    canvas.style.cursor = hot ? "pointer" : scrolls() ? "grab" : "default";
     onHover?.(hot?.p);
   });
   canvas.addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, t: performance.now(), t0: e.timeStamp, pan };
@@ -159,17 +203,17 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       return;
     }
     if (moved < 10) { const h = cast(e, hitboxes()); if (h) location.hash = h.object.userData.stand.p.id; }
-    else if (scroller) snapTo(pan - (d.vx || 0) * 260 * worldPerPx());   // a flick carries on to the next model
+    else if (scrolls()) snapTo(pan - (d.vx || 0) * 260 * worldPerPx());   // a flick carries on to the next model
   });
   canvas.addEventListener("pointerleave", () => { hot = null; focus?.d?.pointer?.("leave", null, T.value); });
   addEventListener("keydown", e => {
     if (focus?.d?.key && !e.target.closest("input, textarea")) focus.d.key(e, T.value);
-    if (!focus && scroller && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); snapTo(panTarget + (e.key === "ArrowLeft" ? -SLOT : SLOT)); }
+    if (!focus && scrolls() && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); snapTo(panTarget + (e.key === "ArrowLeft" ? -SLOT : SLOT)); }
   });
   // A wheel or trackpad scrolls the row too, then settles on the nearest model.
   canvas.addEventListener("wheel", e => {
-    if (focus || !scroller) return; e.preventDefault();
-    panTarget = THREE.MathUtils.clamp(panTarget + (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * worldPerPx(), -ENDS - 0.6, ENDS + 0.6);
+    if (focus || !scrolls()) return; e.preventDefault();
+    panTarget = THREE.MathUtils.clamp(panTarget + (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * worldPerPx(), -panMax - 0.6, panMax + 0.6);
     clearTimeout(snapTimer); snapTimer = setTimeout(() => snapTo(panTarget), 140);
   }, { passive: false });
 
@@ -194,7 +238,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   function resize() {
     VW = canvas.clientWidth || innerWidth; VH = canvas.clientHeight || innerHeight;
     renderer.setSize(VW, VH, false); sizeLook();
-    camera.aspect = VW / VH; camera.fov = VH > VW ? 40 : 30; camera.updateProjectionMatrix();
+    camera.aspect = VW / VH; camera.fov = THREE.MathUtils.clamp(30 + (VH / VW - 0.85) * 22, 30, 40);   // wider as the window gets taller, without a step camera.updateProjectionMatrix();
     layout();
     const to = focus ? viewFor(focus) : overviewAt(pan); cam.pos.copy(to.pos); cam.look.copy(to.look); cam.off.copy(to.off || new THREE.Vector2()); tween = null;
   }
@@ -223,6 +267,11 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       const o = overviewAt(pan); cam.pos.copy(o.pos); cam.look.copy(o.look); cam.off.set(0, 0);
     }
     camera.position.copy(cam.pos); camera.lookAt(cam.look);
+    if (still) {                                              // the still's own framing (see STILL)
+      const el = THREE.MathUtils.degToRad(STILL.el), L = STILL.look;
+      camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(STILL.w / 2 / STILL.d)); camera.aspect = VW / VH; camera.clearViewOffset(); camera.updateProjectionMatrix();
+      camera.position.set(L.x, L.y + Math.sin(el) * STILL.d, L.z + Math.cos(el) * STILL.d); camera.lookAt(L);
+    }
     if (cam.off.lengthSq() > 0.25) camera.setViewOffset(VW, VH, cam.off.x, cam.off.y, VW, VH); else camera.clearViewOffset();
     for (const s of stands) {
       const want = !focus && hot === s && !reduced ? 0.12 : 0;
@@ -239,10 +288,25 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
       el.style.transform = `translate(${at[i][0]}px, ${rowY[i]}px) translate(-50%, 0)`;
       el.classList.toggle("hot", hot === stands[i]);
     });
+    camera.updateMatrixWorld(); placeHolds(now, dt);
+    // Tell the page whether the row scrolls, whether it is at either end, and the height of the models on screen
+    // (for the arrows); only when one of them changes.
+    if (!focus) {
+      v3.set(pan, 0.6, 0.5).project(camera);
+      const row = { scrolls: scrolls(), atStart: panTarget <= -panMax + 0.05, atEnd: panTarget >= panMax - 0.05, y: Math.round((-v3.y * 0.5 + 0.5) * VH) };
+      const key = JSON.stringify(row);
+      if (key !== rowKey) { rowKey = key; onRow?.(row); document.documentElement.style.setProperty("--row-y", `${row.y}px`); }
+    } else if (rowKey) { rowKey = ""; onRow?.({ scrolls: scrolls(), atStart: false, atEnd: false }); }
     if (look) { if (frames % 20 === 0) look.retry(); look.tick(T.value); look.render(renderer, scene, camera, T.value); }
     else renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
 
-  return { open, close, ready, get focus() { return focus?.p.id || null; }, renderer, scene };
+  // For making the stills: draw the frame now and hand it back as a WebP with its transparency.
+  if (still) window.__still = () => { renderer.render(scene, camera); return renderer.domElement.toDataURL("image/webp", 0.86); };
+
+  // One model along the row (the arrows on the table).
+  const step = d => { if (!focus && scrolls()) snapTo(panTarget + d * SLOT); };
+
+  return { open, close, step, ready, get focus() { return focus?.p.id || null; }, renderer, scene };
 }
