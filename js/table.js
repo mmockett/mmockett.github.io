@@ -42,8 +42,9 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
   // The table is the page's own colour, flat (it takes no light and no shadow), so it meets the header, the panel
   // and the page around it without a step.
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: "#e9e4d8", toneMapped: false }));
-  // The models shade themselves, but cast nothing on the table: they sit on it cleanly.
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; scene.add(ground);
+  // No floor is drawn in the page's own look: with no shadows on it, it only showed where a turned model cut through
+  // it, and the background is the same colour. (The other looks, for comparing, still dress one.)
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; ground.visible = !!lookName; scene.add(ground);
   const look = lookName ? useLook(lookName, { renderer, scene, hemi, sun, ground, phone }) : null;
   look?.dress(ground);
 
