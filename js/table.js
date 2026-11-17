@@ -1,0 +1,248 @@
+// The table: one three.js scene holding a diorama per project. Click one to fly in; its panel opens beside it.
+import * as THREE from "three";
+import { ease } from "./lib/kit.js";
+import { useLook } from "./looks.js";
+
+const DIORAMAS = {
+  skim: () => import("./dioramas/skim.js"),
+  aquarium: () => import("./dioramas/aquarium.js"),
+  plasm: () => import("./dioramas/plasm.js"),
+  opxy: () => import("./dioramas/opxy.js"),
+  plinth: () => import("./dioramas/plinth.js")
+};
+
+export function mountTable({ canvas, projects, labels, phone, reduced, look: lookName, onOpen, onClose, onHover, onDismiss }) {
+  // The scene is sized from the canvas as laid out, not from the window: on iPhone and iPad (and inside an embedding
+  // frame) innerWidth/innerHeight can disagree with the box the canvas fills, or change without a resize event,
+  // and either one stretches the picture. A ResizeObserver, and a check each frame, keep the two in step.
+  let VW = canvas.clientWidth || innerWidth, VH = canvas.clientHeight || innerHeight;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+  // Drawn at up to twice the screen's resolution: phones at their own (capped at 2), and 1x desktop screens
+  // supersampled at 1.5 for smoother edges. The frame loop steps this down if frames run slow.
+  let dpr = phone ? Math.min(devicePixelRatio, 2) : Math.min(Math.max(devicePixelRatio, 1.5), 2);
+  renderer.setPixelRatio(dpr);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const scene = new THREE.Scene();
+  const BG = new THREE.Color("#e9e4d8");
+  scene.background = BG; scene.fog = new THREE.Fog(BG, 18, 42);
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 120);
+  const T = { value: 0 };
+
+  const hemi = new THREE.HemisphereLight("#fff6e8", "#a99f8c", 1.25); scene.add(hemi);
+  const sun = new THREE.DirectionalLight("#fff1db", 2.4);
+  sun.position.set(-6, 11, 7); sun.castShadow = true;
+  sun.shadow.mapSize.set(phone ? 2048 : 4096, phone ? 2048 : 4096); Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 8, bottom: -8, near: 1, far: 40 });
+  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02; sun.shadow.radius = 3;
+  scene.add(sun);
+  // The table is the page's own colour, flat (it takes no light and no shadow), so it meets the header, the panel
+  // and the page around it without a step.
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshBasicMaterial({ color: "#e9e4d8", toneMapped: false }));
+  // The models shade themselves, but cast nothing on the table: they sit on it cleanly.
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = false; scene.add(ground);
+  const look = lookName ? useLook(lookName, { renderer, scene, hemi, sun, ground, phone }) : null;
+  look?.dress(ground);
+
+  const ctx = { THREE, renderer, scene, camera, phone, reduced, T, look: look?.name || null, paint: look?.paint, dress: look?.dress };
+  // Each stand keeps its place on the table (base) apart from where it is drawn just now (lifted on hover).
+  const stands = projects.map((p, i) => ({ p, i, d: null, root: new THREE.Group(), base: new THREE.Vector3(), lift: 0 }));
+  stands.forEach(s => scene.add(s.root));
+
+  // Lay the dioramas out in one gentle arc. Where the whole row would leave each model too small (narrow windows,
+  // phones), the camera shows about one model at a time and you scroll along the row instead: drag, swipe, wheel or
+  // arrow keys, settling on the nearest model.
+  const SLOT = 3.35, n = stands.length, ENDS = (n - 1) / 2 * SLOT;
+  let scroller = false, pan = -ENDS, panTarget = -ENDS, snapTimer = 0;
+  const arcZ = x => -Math.cos(x / 7) * 0.9 + 0.9;
+  function layout() {
+    stands.forEach((s, i) => { const x = (i - (n - 1) / 2) * SLOT; s.base.set(x, 0, arcZ(x)); s.root.position.copy(s.base); });
+    scroller = VW * SLOT / (n * SLOT + 1.2) < 240;          // each model under ~240 px with the whole row in view
+    if (!scroller) pan = panTarget = 0;
+    else { panTarget = THREE.MathUtils.clamp(panTarget, -ENDS, ENDS); pan = panTarget; }
+  }
+  // The overview camera: the whole row from about 27° up, or (scrolling) one slot and a bit, centred on x.
+  function overviewAt(x) {
+    const vf = THREE.MathUtils.degToRad(camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
+    const half = scroller ? SLOT * 0.64 : (n * SLOT) / 2 + 0.6;
+    const dist = Math.max(half / Math.tan(hf / 2), 7), el = THREE.MathUtils.degToRad(27);
+    const look = new THREE.Vector3(x, 0.6, 0.5 + (scroller ? arcZ(x) : 0));
+    return { pos: look.clone().add(new THREE.Vector3(0, Math.sin(el) * dist, Math.cos(el) * dist)), look };
+  }
+  const snapTo = x => { panTarget = THREE.MathUtils.clamp(Math.round(x / SLOT + (n - 1) / 2), 0, n - 1) * SLOT - ENDS; };
+  const worldPerPx = () => (2 * SLOT * 0.64) / VW;
+
+  // Camera. In focus the projection is shifted (setViewOffset) so the model sits centred in the space the panel leaves,
+  // at whatever distance fits its size into that space.
+  const cam = { pos: new THREE.Vector3(), look: new THREE.Vector3(), off: new THREE.Vector2() };
+  let tween = null, focus = null;
+  function freeArea() {
+    // Same breakpoint as the page's CSS: the panel becomes a bottom sheet only on narrow windows.
+    // The header bar takes the top of the window, so the model is framed in the space below it.
+    const top = document.querySelector(".hdr")?.offsetHeight || 0;
+    if (VW <= 760) { const sheet = VH * 0.58; return { w: VW, h: VH - sheet - top, off: new THREE.Vector2(0, (sheet - top) / 2) }; }
+    const panel = Math.min(520, VW * 0.42); return { w: VW - panel, h: VH - top, off: new THREE.Vector2(panel / 2, -top / 2) };
+  }
+  function viewFor(s) {
+    const v = s.d?.view || {}, c = s.base, free = freeArea();   // its place on the table, wherever it is drawn just now
+    const fit = (v.fit || (s.d?.footprint || 1.4) * 1.15) * 1.08, el = THREE.MathUtils.degToRad(v.elev ?? 30);
+    const vf = THREE.MathUtils.degToRad(camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
+    const hFree = 2 * Math.atan(Math.tan(hf / 2) * free.w / VW), vFree = 2 * Math.atan(Math.tan(vf / 2) * free.h / VH);
+    const d = Math.max(fit / Math.tan(hFree / 2), fit * (v.aspectH || 0.75) / Math.tan(vFree / 2));
+    const look = c.clone().add(new THREE.Vector3(0, v.lookY ?? 0.5, 0));
+    const pos = look.clone().add(new THREE.Vector3(0, Math.sin(el) * d, Math.cos(el) * d));
+    return { pos, look, off: free.off };
+  }
+  // A move between two models eases back and up a little on the way, so it reads as one travelling shot;
+  // its length follows the distance, so neighbours are quick and the far end of the row is not rushed.
+  function fly(to, ms, travel = false) {
+    const off = to.off || new THREE.Vector2();
+    if (reduced) { cam.pos.copy(to.pos); cam.look.copy(to.look); cam.off.copy(off); tween = null; return; }
+    const span = cam.look.distanceTo(to.look);
+    ms ??= THREE.MathUtils.clamp(850 + span * 110, 900, 1700);
+    tween = { t0: performance.now(), ms, fp: cam.pos.clone(), fl: cam.look.clone(), fo: cam.off.clone(), to: { ...to, off }, arc: travel ? Math.min(span * 0.22, 1.6) : 0 };
+  }
+  function open(id) {
+    const s = stands.find(x => x.p.id === id); if (!s) return false;
+    const from = focus; focus = s; fly(viewFor(s), undefined, !!from && from !== s); onOpen?.(s.p); return true;
+  }
+  function close() {
+    if (!focus) return; focus.d?.pointer?.("leave", null, T.value);
+    if (scroller) pan = panTarget = focus.base.x;            // back on the row where the model you had open stands
+    focus = null; fly(overviewAt(panTarget)); onClose?.();
+  }
+
+  // Labels under each model
+  // Each label is the project's own logo where it has one (markup from the page's own SITE data).
+  labels.innerHTML = stands.map(s => `<button type="button" class="label" data-id="${s.p.id}" aria-label="${s.p.name}${s.p.platform ? ", " + s.p.platform : ""}"><b>${s.p.logo || s.p.short || s.p.name}</b></button>`).join("");
+  const labelEls = [...labels.children];
+  labelEls.forEach(el => el.addEventListener("click", () => { location.hash = el.dataset.id; }));
+
+  // Pointer
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  let hot = null, down = null;
+  function cast(e, list) {
+    const r = canvas.getBoundingClientRect();
+    ndc.set((e.clientX - r.left) / VW * 2 - 1, -((e.clientY - r.top) / VH) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    return ray.intersectObjects(list, true)[0] || null;
+  }
+  const hitboxes = () => stands.filter(s => s.hitbox).map(s => s.hitbox);
+  canvas.addEventListener("pointermove", e => {
+    if (focus?.d) {
+      const h = cast(e, focus.d.hit || []);
+      focus.d.pointer?.(down ? "drag" : "move", h, T.value, e, down && { dx: e.clientX - down.x, dy: e.clientY - down.y });
+      canvas.style.cursor = h ? (focus.d.cursor || "pointer") : "default";
+      hot = null; return;
+    }
+    if (scroller && down) {                                   // dragging along the row
+      const dx = e.clientX - down.x; down.vx = (e.clientX - (down.lx ?? down.x)) / Math.max(1, e.timeStamp - (down.lt ?? down.t0)); down.lx = e.clientX; down.lt = e.timeStamp;
+      if (Math.abs(dx) > 6) { panTarget = pan = THREE.MathUtils.clamp(down.pan - dx * worldPerPx(), -ENDS - 0.8, ENDS + 0.8); hot = null; canvas.style.cursor = "grabbing"; return; }
+    }
+    const h = cast(e, hitboxes());
+    hot = h ? h.object.userData.stand : null;
+    canvas.style.cursor = hot ? "pointer" : scroller ? "grab" : "default";
+    onHover?.(hot?.p);
+  });
+  canvas.addEventListener("pointerdown", e => { down = { x: e.clientX, y: e.clientY, t: performance.now(), t0: e.timeStamp, pan };
+    if (!focus && e.pointerType !== "mouse") { const h = cast(e, hitboxes()); hot = h ? h.object.userData.stand : null; } if (focus?.d) { const h = cast(e, focus.d.hit || []); focus.d.pointer?.("down", h, T.value, e); } });
+  canvas.addEventListener("pointerup", e => {
+    const d = down; down = null; if (!d) return;
+    const dx = e.clientX - d.x, dy = e.clientY - d.y, moved = Math.hypot(dx, dy);
+    if (focus?.d) {
+      const h = cast(e, focus.d.hit || []);
+      if (moved > 14) { focus.d.pointer?.("swipe", h, T.value, e, { dx, dy }); return; }
+      if (h) { focus.d.pointer?.("click", h, T.value, e); return; }
+      focus.d.pointer?.("up", null, T.value, e);
+      const other = cast(e, hitboxes());
+      if (other && other.object.userData.stand !== focus) location.hash = other.object.userData.stand.p.id;
+      else if (!other) onDismiss?.();
+      return;
+    }
+    if (moved < 10) { const h = cast(e, hitboxes()); if (h) location.hash = h.object.userData.stand.p.id; }
+    else if (scroller) snapTo(pan - (d.vx || 0) * 260 * worldPerPx());   // a flick carries on to the next model
+  });
+  canvas.addEventListener("pointerleave", () => { hot = null; focus?.d?.pointer?.("leave", null, T.value); });
+  addEventListener("keydown", e => {
+    if (focus?.d?.key && !e.target.closest("input, textarea")) focus.d.key(e, T.value);
+    if (!focus && scroller && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); snapTo(panTarget + (e.key === "ArrowLeft" ? -SLOT : SLOT)); }
+  });
+  // A wheel or trackpad scrolls the row too, then settles on the nearest model.
+  canvas.addEventListener("wheel", e => {
+    if (focus || !scroller) return; e.preventDefault();
+    panTarget = THREE.MathUtils.clamp(panTarget + (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * worldPerPx(), -ENDS - 0.6, ENDS + 0.6);
+    clearTimeout(snapTimer); snapTimer = setTimeout(() => snapTo(panTarget), 140);
+  }, { passive: false });
+
+  // Build every diorama in parallel; each appears as soon as it's ready.
+  const ready = Promise.all(stands.map(async s => {
+    const name = DIORAMAS[s.p.diorama] ? s.p.diorama : "plinth";
+    try {
+      const mod = await DIORAMAS[name]();
+      s.d = await mod.build({ ...ctx, project: s.p });
+    } catch (err) {
+      console.error(`[table] ${s.p.id}:`, err);
+      s.d = await (await DIORAMAS.plinth()).build({ ...ctx, project: s.p });
+    }
+    look?.dress(s.d.group);
+    s.root.add(s.d.group);
+    const r = s.d.footprint || 1.4;
+    s.hitbox = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 2.4, 16), new THREE.MeshBasicMaterial({ visible: false }));
+    s.hitbox.position.y = 1.1; s.hitbox.userData.stand = s; s.root.add(s.hitbox);
+    if (focus === s) fly(viewFor(s), 1);
+  }));
+
+  function resize() {
+    VW = canvas.clientWidth || innerWidth; VH = canvas.clientHeight || innerHeight;
+    renderer.setSize(VW, VH, false); sizeLook();
+    camera.aspect = VW / VH; camera.fov = VH > VW ? 40 : 30; camera.updateProjectionMatrix();
+    layout();
+    const to = focus ? viewFor(focus) : overviewAt(pan); cam.pos.copy(to.pos); cam.look.copy(to.look); cam.off.copy(to.off || new THREE.Vector2()); tween = null;
+  }
+  function sizeLook() { const b = renderer.getDrawingBufferSize(new THREE.Vector2()); look?.setSize(b.x, b.y, renderer.getPixelRatio()); }
+  addEventListener("resize", resize); resize();
+  if (globalThis.ResizeObserver) new ResizeObserver(() => { if (canvas.clientWidth !== VW || canvas.clientHeight !== VH) resize(); }).observe(canvas);
+
+  // Frame loop: paused while hidden; resolution steps down if frames run slow.
+  const t0 = performance.now(); let last = t0, slow = 0, frames = 0;
+  const v3 = new THREE.Vector3();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden) { last = now; return; }
+    if (canvas.clientWidth !== VW || canvas.clientHeight !== VH) resize();
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (++frames > 30) { if (dt > 0.026) slow++; else slow = Math.max(0, slow - 0.5); if (slow > 40 && dpr > 1) { dpr = Math.max(1, dpr - 0.25); renderer.setPixelRatio(dpr); renderer.setSize(VW, VH, false); sizeLook(); slow = 0; } }
+    T.value = reduced ? 6 : (now - t0) / 1000;
+    if (tween) {
+      const k = Math.min(1, (performance.now() - tween.t0) / tween.ms), e = ease(k);
+      cam.pos.lerpVectors(tween.fp, tween.to.pos, e); cam.look.lerpVectors(tween.fl, tween.to.look, e); cam.off.lerpVectors(tween.fo, tween.to.off, e);
+      if (tween.arc) { const b = Math.sin(Math.PI * e) * tween.arc; v3.subVectors(cam.pos, cam.look).normalize(); cam.pos.addScaledVector(v3, b).y += b * 0.35; }
+      if (k >= 1) tween = null;
+    }
+    if (!focus && !tween) {                                   // on the table: the camera rides the pan along the row
+      pan += (panTarget - pan) * (reduced ? 1 : Math.min(1, dt * 7));
+      const o = overviewAt(pan); cam.pos.copy(o.pos); cam.look.copy(o.look); cam.off.set(0, 0);
+    }
+    camera.position.copy(cam.pos); camera.lookAt(cam.look);
+    if (cam.off.lengthSq() > 0.25) camera.setViewOffset(VW, VH, cam.off.x, cam.off.y, VW, VH); else camera.clearViewOffset();
+    for (const s of stands) {
+      const want = !focus && hot === s && !reduced ? 0.12 : 0;
+      s.lift += (want - s.lift) * (reduced ? 1 : Math.min(1, dt * 8));
+      s.root.position.set(s.base.x, s.lift, s.base.z);
+      // Only the model you're looking at animates in focus; all of them do on the table.
+      if (s.d && (!focus || focus === s || !reduced)) s.d.update?.(T.value, dt, focus === s);
+    }
+    // Labels sit just in front of each model; the labels of one row (the whole arc, or each pair of the two columns)
+    // share one baseline, the lowest of them.
+    const at = stands.map(s => { v3.copy(s.base); v3.z += (s.d?.footprint || 1.4) + 0.25; v3.project(camera); return [(v3.x * 0.5 + 0.5) * VW, (-v3.y * 0.5 + 0.5) * VH]; });
+    const rowY = stands.map(a => Math.max(...stands.map((b, j) => (Math.abs(b.base.z - a.base.z) < 1.2 ? at[j][1] : -Infinity))));
+    labelEls.forEach((el, i) => {
+      el.style.transform = `translate(${at[i][0]}px, ${rowY[i]}px) translate(-50%, 0)`;
+      el.classList.toggle("hot", hot === stands[i]);
+    });
+    if (look) { if (frames % 20 === 0) look.retry(); look.tick(T.value); look.render(renderer, scene, camera, T.value); }
+    else renderer.render(scene, camera);
+  }
+  requestAnimationFrame(frame);
+
+  return { open, close, ready, get focus() { return focus?.p.id || null; }, renderer, scene };
+}

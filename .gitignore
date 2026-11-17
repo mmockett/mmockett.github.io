@@ -1,0 +1,8 @@
+.DS_Store
+# Working material kept out of the public site
+sketches/
+drafts/
+looks.html
+pastel.html
+directions.html
+.capture-cdp.mjs
