@@ -65,7 +65,7 @@ export function mountTable({ canvas, projects, labels, phone, reduced, look: loo
     stands.forEach((s, i) => { const x = (i - (n - 1) / 2) * SLOT; s.base.set(x, 0, arcZ(x)); s.root.position.copy(s.base); });
     const fits = VW * SLOT / (2 * ROW_HALF) >= MIN_PX, was = halfTarget < ROW_HALF;
     halfTarget = fits ? ROW_HALF : Math.max(ONE, 1.1 * VW / VH);        // one model, tall enough for the tallest
-    panMax = ROW_HALF - halfTarget;
+    panMax = fits ? 0 : (n - 1) / 2 * SLOT;                         // the carousel stops with the first or last model centred
     if (first || reduced) half = halfTarget;
     if (!fits && (first || !was)) pan = panTarget = -panMax;         // entering the carousel: from the start of the row
     if (fits) panTarget = 0;
